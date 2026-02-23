@@ -1,7 +1,3 @@
-"""
-app.py — FastAPI server + strategy loop corregido para Underdog $1
-"""
-
 import asyncio
 import logging
 import os
@@ -21,18 +17,17 @@ from starlette.requests import Request
 from strategy_core import (
     find_active_sol_market,
     get_dual_book_metrics,
-    compute_combined_obi,
-    compute_signal,
     seconds_remaining,
-    fetch_clob_market,
 )
-from price_feed import PriceFeed
 from simulator import Portfolio
 import db as database
 
 # ── Config ────────────────────────────────────────────────────────────────────
 POLL_INTERVAL = 3.0
 PORT          = int(os.environ.get("PORT", "8000"))
+
+# Configuración de Plantillas (Asegúrate de tener la carpeta /templates)
+templates = Jinja2Templates(directory="templates")
 
 # ── Shared state ──────────────────────────────────────────────────────────────
 connected: set[WebSocket] = set()
@@ -48,15 +43,12 @@ async def broadcast(data: dict):
     connected.difference_update(dead)
 
 # ── Strategy loop ─────────────────────────────────────────────────────────────
-
 async def strategy_loop():
     saved     = database.load_state()
     portfolio = Portfolio(db=database)
     portfolio.restore(saved)
     log.info(f"Bot iniciado. Capital=${portfolio.capital:.2f}")
 
-    price_feed = PriceFeed()
-    obi_window = deque(maxlen=6)
     market_info = None
     last_market_id = None
 
@@ -71,33 +63,25 @@ async def strategy_loop():
 
             if market_info["condition_id"] != last_market_id:
                 last_market_id = market_info["condition_id"]
-                log.info(f"Nuevo mercado: {market_info['question']}")
-                if portfolio.active_trade:
-                    portfolio.close_trade(market_info["up_price"], market_info["down_price"])
+                log.info(f"Nuevo mercado detectado: {market_info['question']}")
 
+            # Obtener métricas básicas
             up_ob, down_ob, err = await asyncio.to_thread(
                 get_dual_book_metrics,
                 market_info["up_token_id"],
                 market_info["down_token_id"],
             )
 
-            if err:
-                market_info = None
-                await asyncio.sleep(5)
-                continue
+            if not err:
+                market_info["up_price"] = up_ob["vwap_mid"]
+                market_info["down_price"] = round(1 - up_ob["vwap_mid"], 4)
 
-            # Actualizar precios
-            market_info["up_price"] = up_ob["vwap_mid"]
-            market_info["down_price"] = round(1 - up_ob["vwap_mid"], 4)
-
-            # ── Tiempo restante ──
             secs_left = seconds_remaining(market_info)
 
-            # ── Entrada Underdog ──
+            # Lógica de Entrada Underdog
             if secs_left is not None and not portfolio.active_trade:
-                # Corregido: Apuesta fija de $1 para evitar error de trade_pct
                 entered = portfolio.consider_entry(
-                    {}, # Signal vacío
+                    {}, 
                     market_info["question"],
                     market_info["up_price"],
                     market_info["down_price"],
@@ -105,20 +89,20 @@ async def strategy_loop():
                 )
                 if entered:
                     t = portfolio.active_trade
-                    log.info(f"ENTRADA Underdog #{t.id}: {t.direction} precio={t.entry_price:.4f} secs_left={secs_left:.0f}")
+                    log.info(f"ORDEN COLOCADA #{t.id}: {t.direction} a {t.entry_price}")
 
-            # ── Cierre por expiración (simulado) ──
+            # Lógica de Cierre
             if secs_left is not None and secs_left < 5 and portfolio.active_trade:
-                closed = portfolio.close_trade(market_info["up_price"], market_info["down_price"])
-                if closed:
-                    log.info(f"FIN DE MERCADO #{closed.id}: {closed.status} P&L={closed.pnl:+.4f}")
+                portfolio.close_trade(market_info["up_price"], market_info["down_price"])
 
-            if secs_left is not None and secs_left <= 0:
-                market_info = None
-                await asyncio.sleep(5)
-                continue
-
+            # Actualizar estado para el Dashboard
             state["market"] = market_info
+            state["status"] = "active"
+            state["portfolio"] = {
+                "capital": portfolio.capital,
+                "active_trade": portfolio.active_trade.to_dict() if portfolio.active_trade else None
+            }
+            
             await broadcast(state)
             await asyncio.sleep(POLL_INTERVAL)
 
@@ -126,7 +110,7 @@ async def strategy_loop():
             log.error(f"Error en loop: {e}")
             await asyncio.sleep(5)
 
-# ── FastAPI setup ─────────────────────────────────────────────────────────────
+# ── Rutas de FastAPI ──────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -135,18 +119,25 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-@app.get("/")
-async def root():
-    return {"status": "running", "strategy": "Underdog Last Minute"}
+# ESTA ES LA RUTA QUE HACÍA FALTA:
+@app.get("/", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.get("/api/status")
+async def get_status():
+    return {"status": "running", "strategy": "Underdog Last Minute", "active_connections": len(connected)}
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     connected.add(websocket)
     try:
+        # Enviar estado inicial al conectar
+        await websocket.send_json(state)
         while True:
-            await websocket.receive_text()
-    except:
+            await websocket.receive_text() # Mantener conexión viva
+    except WebSocketDisconnect:
         connected.remove(websocket)
 
 if __name__ == "__main__":
