@@ -1,10 +1,19 @@
 """
-simulator.py — Portfolio simulation v2: smart mid-market exits
-  TP     : Take Profit when unrealized >= bet * TAKE_PROFIT_MULT
-  SL     : Stop Loss   when unrealized <= -(bet * STOP_LOSS_PCT)
-  SIGNAL : Exit after SIGNAL_EXIT_N consecutive opposing OBI snaps
-  LATE   : Exit in last LATE_EXIT_SECS seconds if any profit
-  EXPIRE : Binary resolution at market expiry (fallback)
+simulator.py — Portfolio simulation v3: parámetros calibrados para mercados 5min
+  TP      : Take Profit when unrealized >= bet * TAKE_PROFIT_MULT
+  SL      : Stop Loss   when unrealized <= -(bet * STOP_LOSS_PCT)
+  SIGNAL  : Exit after SIGNAL_EXIT_N consecutive opposing OBI snaps
+  LATE    : Exit in last LATE_EXIT_SECS seconds if any profit
+  EXPIRE  : Binary resolution at market expiry (fallback)
+
+Cambios v3 vs v2:
+  - ENTRY_AFTER_N: 6 → 3 (en 5min cada segundo cuenta)
+  - MIN_CONFIDENCE: 65 → 60 (threshold más bajo genera señales más débiles)
+  - TAKE_PROFIT_MULT: 3.0 → 2.0 (salir más rápido con ganancia real)
+  - STOP_LOSS_PCT: 0.65 → 0.45 (cortar pérdidas antes)
+  - MAX_ENTRY_SPREAD: 0.12 → 0.10 (más estricto con la liquidez)
+  - SIGNAL_EXIT_N: 5 → 4 (reaccionar más rápido a reversión de señal)
+  - LATE_EXIT_SECS: 45 → 60 (salir un poco antes al final)
 """
 
 from dataclasses import dataclass
@@ -14,18 +23,18 @@ from typing import Optional
 
 INITIAL_CAPITAL  = 100.0
 TRADE_PCT        = 0.02      # 2% of capital per trade
-MIN_CONFIDENCE   = 65
-ENTRY_AFTER_N    = 6         # consecutive aligned snaps required to enter (Subido a 6 para mayor seguridad)
+MIN_CONFIDENCE   = 60        # Bajado de 65 → 60
+ENTRY_AFTER_N    = 3         # Bajado de 6 → 3 snaps consecutivos (9s con poll 3s)
 
-# Entry filters (realistic price guards)
-MIN_ENTRY_PRICE  = 0.20      # skip tokens below 20¢ (huge spread, lottery-ticket probability)
-MAX_ENTRY_SPREAD = 0.12      # skip when (ask-bid)/ask > 12% → SL would fire on 1st snapshot
+# Entry filters
+MIN_ENTRY_PRICE  = 0.20      # skip tokens below 20¢
+MAX_ENTRY_SPREAD = 0.10      # Bajado de 12% → 10%: spread máximo tolerable
 
-# v2 exit parameters
-TAKE_PROFIT_MULT = 3.0       # TP when unrealized >= bet * 3
-STOP_LOSS_PCT    = 0.65      # SL when unrealized <= -(bet * 0.65) (Corregido al 65% real)
-SIGNAL_EXIT_N    = 5         # exit after N consecutive opposing signal snaps
-LATE_EXIT_SECS   = 45        # exit in last 45 s with any profit
+# Exit parameters
+TAKE_PROFIT_MULT = 2.0       # Bajado de 3.0 → 2.0: TP al 200% del bet
+STOP_LOSS_PCT    = 0.45      # Bajado de 0.65 → 0.45: SL al 45% del bet
+SIGNAL_EXIT_N    = 4         # Bajado de 5 → 4 snaps contrarios para salir
+LATE_EXIT_SECS   = 60        # Subido de 45 → 60: salir antes de la última campana
 
 
 @dataclass
@@ -49,7 +58,6 @@ class Trade:
         return round(self.mark_to_market(current_price) - self.bet_size, 4)
 
     def close_binary(self, won: bool, exit_price: float, exit_reason: str = "EXPIRE") -> float:
-        """Binary resolution when market expires (token resolves to 0 or 1)."""
         self.exit_price  = exit_price
         self.exit_reason = exit_reason
         if won:
@@ -62,7 +70,6 @@ class Trade:
         return self.pnl
 
     def close_market(self, exit_price: float, exit_reason: str) -> float:
-        """Mid-market close at current token price."""
         self.exit_price  = round(exit_price, 4)
         self.exit_reason = exit_reason
         proceeds = self.shares * exit_price
@@ -98,7 +105,7 @@ class Portfolio:
         self._trade_counter  = 0
         self._db             = db
         self._signal_streak: dict = {"label": None, "count": 0}
-        self._opposing_streak = 0   # consecutive opposing OBI snaps while in trade
+        self._opposing_streak = 0
 
     def restore(self, saved: dict) -> None:
         self.capital         = saved["capital"]
@@ -141,8 +148,6 @@ class Portfolio:
 
         bet_size = round(self.capital * self.trade_pct, 2)
 
-        # Use depth-walked avg ask price and shares when available (realistic entry).
-        # Fallback: vwap_mid (old behaviour, used when book is one-sided / unavailable).
         depth = entry_depth_up if direction == "UP" else entry_depth_down
         if depth and depth.get("shares", 0) > 0:
             entry_price = depth["avg_price"]
@@ -154,12 +159,9 @@ class Portfolio:
         if entry_price <= 0.01:
             return False
 
-        # Filter 1: skip very cheap tokens (low probability, enormous spreads)
         if entry_price < MIN_ENTRY_PRICE:
             return False
 
-        # Filter 2: skip wide-spread entries — (ask-bid)/ask > MAX_ENTRY_SPREAD
-        # means we'd already be near SL the moment we enter.
         bid_for_dir = up_bid if direction == "UP" else down_bid
         if bid_for_dir is not None and bid_for_dir > 0:
             spread_pct = (entry_price - bid_for_dir) / entry_price
@@ -183,15 +185,10 @@ class Portfolio:
             self._db.save_trade(self.active_trade)
         return True
 
-    # ── v2: Smart exit checks ─────────────────────────────────────────────────
+    # ── v3: Smart exit checks ─────────────────────────────────────────────────
 
     def check_exits(self, signal: dict, up_price: float, down_price: float,
                     secs_left) -> Optional[str]:
-        """
-        Evaluate exit conditions every snapshot.
-        Returns the exit reason string, or None if no exit.
-        Priority: TP > SL > SIGNAL > LATE
-        """
         if not self.active_trade:
             return None
 
@@ -213,8 +210,8 @@ class Portfolio:
             if direction != trade.direction:
                 self._opposing_streak += 1
             else:
-                self._opposing_streak = 0  # aligned signal resets counter
-        # NEUTRAL: leave streak unchanged
+                self._opposing_streak = 0
+        # NEUTRAL: no cambia streak
 
         if self._opposing_streak >= SIGNAL_EXIT_N:
             return "SIGNAL"
@@ -228,9 +225,6 @@ class Portfolio:
     def exit_at_market_price(self, up_price: float, down_price: float,
                              exit_reason: str,
                              exit_bid_price: float = None) -> Optional[Trade]:
-        """Close active trade.
-        Uses exit_bid_price (depth-walked avg bid) when provided for realism;
-        falls back to vwap_mid when the book is unavailable."""
         if not self.active_trade:
             return None
 
@@ -273,7 +267,6 @@ class Portfolio:
 
     def close_trade(self, up_price: float, down_price: float,
                     force_winner: Optional[bool] = None) -> Optional[Trade]:
-        """Binary resolution at market expiry."""
         if not self.active_trade:
             return None
 
