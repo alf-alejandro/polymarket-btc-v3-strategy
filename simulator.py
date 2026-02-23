@@ -18,13 +18,13 @@ MIN_CONFIDENCE   = 65
 ENTRY_AFTER_N    = 4         # consecutive aligned snaps required to enter
 
 # Entry filters (realistic price guards)
-MIN_ENTRY_PRICE  = 0.10      # skip tokens below 10¢ (huge spread, lottery-ticket probability)
-MAX_ENTRY_SPREAD = 0.25      # skip when (ask-bid)/ask > 25% → SL would fire on 1st snapshot
+MIN_ENTRY_PRICE  = 0.20      # skip tokens below 10¢ (huge spread, lottery-ticket probability)
+MAX_ENTRY_SPREAD = 0.12      # skip when (ask-bid)/ask > 25% → SL would fire on 1st snapshot
 
 # v2 exit parameters
 TAKE_PROFIT_MULT = 3.0       # TP when unrealized >= bet * 3
-STOP_LOSS_PCT    = 0.50      # SL when unrealized <= -(bet * 0.50)
-SIGNAL_EXIT_N    = 3         # exit after N consecutive opposing signal snaps
+STOP_LOSS_PCT    = 0.65      # SL when unrealized <= -(bet * 0.50)
+SIGNAL_EXIT_N    = 5         # exit after N consecutive opposing signal snaps
 LATE_EXIT_SECS   = 45        # exit in last 45 s with any profit
 
 
