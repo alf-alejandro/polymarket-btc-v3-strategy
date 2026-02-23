@@ -271,13 +271,35 @@ async def strategy_loop():
                     market_info["down_price"],
                     secs_left,
                 )
-                if reason:
+                if reason == "PARTIAL_TP":
+                    # Salida parcial: vender 50% al mejor bid disponible
                     at             = portfolio.active_trade
                     exit_bid_price = None
                     if book_valid:
                         bids_to_walk = top_bids_up if at.direction == "UP" else top_bids_down
                         if bids_to_walk:
-                            d = _walk_bids_for_exit(bids_to_walk, at.shares)
+                            d = _walk_bids_for_exit(bids_to_walk, at.shares_remaining * 0.5)
+                            if d["shares_sold"] > 0:
+                                exit_bid_price = d["avg_price"]
+                    partial_pnl = portfolio.apply_partial_exit(
+                        market_info["up_price"],
+                        market_info["down_price"],
+                        exit_bid_price=exit_bid_price,
+                    )
+                    log.info(
+                        f"PARTIAL_TP #{at.id}: precio={exit_bid_price or 'mid':.4f} "
+                        f"pnl_parcial={partial_pnl:+.4f} | "
+                        f"shares restantes={at.shares_remaining:.4f} → esperando resolución"
+                    )
+                elif reason:
+                    # Salida total (SL o LATE)
+                    at             = portfolio.active_trade
+                    exit_bid_price = None
+                    if book_valid:
+                        bids_to_walk = top_bids_up if at.direction == "UP" else top_bids_down
+                        if bids_to_walk:
+                            shares_to_walk = at.shares_remaining if at.partial_exit_done else at.shares
+                            d = _walk_bids_for_exit(bids_to_walk, shares_to_walk)
                             if d["shares_sold"] > 0:
                                 exit_bid_price = d["avg_price"]
                     exited = portfolio.exit_at_market_price(
@@ -293,24 +315,33 @@ async def strategy_loop():
                             f"pnl={exited.pnl:+.4f}"
                         )
 
-            # ── Entry: solo en primeros 4 minutos (>60s restantes) ────────────
-            if secs_left is not None and secs_left > 60:
-                bet_size         = round(portfolio.capital * 0.02, 2)
+            # ── Entry: mean reversion — buscar token barato en zona 0.15–0.35 ──
+            # El filtro de tiempo y precio está dentro de consider_entry
+            if secs_left is not None and not portfolio.active_trade:
+                bet_size         = round(portfolio.capital * 0.04, 2)
                 entry_depth_up   = _walk_asks_for_entry(top_asks_up, bet_size) \
                                    if book_valid and top_asks_up and bet_size > 0 else None
                 entry_depth_down = _walk_asks_for_entry(top_asks_down, bet_size) \
                                    if book_valid and top_asks_down and bet_size > 0 else None
 
-                portfolio.consider_entry(
+                entered = portfolio.consider_entry(
                     signal,
                     market_info["question"],
                     market_info["up_price"],
                     market_info["down_price"],
+                    secs_left=secs_left,
                     entry_depth_up=entry_depth_up,
                     entry_depth_down=entry_depth_down,
                     up_bid=up_bid if book_valid else None,
                     down_bid=down_bid if book_valid and down_ob else None,
                 )
+                if entered:
+                    t = portfolio.active_trade
+                    log.info(
+                        f"ENTRADA Mean Reversion #{t.id}: {t.direction} "
+                        f"precio={t.entry_price:.4f} shares={t.shares:.2f} "
+                        f"secs_left={secs_left:.0f} target={0.47}"
+                    )
 
             # Emergency close
             if secs_left is not None and secs_left < 5 and portfolio.active_trade:
