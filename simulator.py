@@ -41,7 +41,7 @@ from typing import Optional
 
 
 INITIAL_CAPITAL  = 100.0
-TRADE_PCT        = 0.04       # 4% por trade: tamaño mayor porque el riesgo es asimétrico
+TRADE_PCT        = 0.02       # 2% por trade
 
 # ── Filtros de entrada ─────────────────────────────────────────────────────────
 MIN_ENTRY_PRICE   = 0.15      # no entrar por debajo de 15¢ (muy extremo, raro)
@@ -337,15 +337,12 @@ class Portfolio:
         if trade.should_sl(current_price):
             return "SL"
 
-        # 3. Tiempo crítico: si quedan < 30s y el token NO llegó al TP,
-        #    salir con lo que haya si estamos en ganancia.
-        #    Si estamos en pérdida, aguantar a resolución binaria
-        #    (ya entramos barato, la resolución nos puede dar jackpot)
-        if secs_left is not None and secs_left <= 30:
+        # 3. Últimos 20s: si hay ganancia neta, asegurar
+        #    Si hay pérdida, NO salir — dejar resolver binary (entramos barato)
+        if secs_left is not None and secs_left <= 20:
             upnl = trade.unrealized_pnl(current_price)
             if upnl > 0:
                 return "LATE"
-            # Si estamos en pérdida, NO salir — dejar resolver binary
 
         return None
 
