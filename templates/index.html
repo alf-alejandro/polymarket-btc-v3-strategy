@@ -1,204 +1,113 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Underdog Hunter — Polymarket</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <style>
-    :root {
-      --green:  #00ff88;
-      --red:    #ff4466;
-      --yellow: #fbbf24;
-      --cyan:   #22d3ee;
-      --bg:     #05070a;
-      --card:   #0d1117;
-      --border: #1f2937;
-    }
-    body { background: var(--bg); color: #e2e8f0; font-family: 'monospace'; margin: 0; }
-    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; }
-    
-    /* Animación para el último minuto */
-    @keyframes panic { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; transform: scale(1.05); } }
-    .last-minute { color: var(--red) !important; animation: panic 0.8s infinite; }
-    
-    .status-dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
-    .status-run { background: var(--green); box-shadow: 0 0 10px var(--green); }
-    .status-wait { background: var(--yellow); }
-
-    .price-box { transition: all 0.3s ease; border: 2px solid transparent; }
-    .price-target { border-color: var(--cyan); background: rgba(34, 211, 238, 0.1); }
-  </style>
+    <meta charset="UTF-8">
+    <title>Underdog Hunter v1.2</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root { --green: #00ff88; --red: #ff4466; --bg: #05070a; --card: #0d1117; }
+        body { background: var(--bg); color: #e2e8f0; font-family: monospace; }
+        .card { background: var(--card); border: 1px solid #1f2937; border-radius: 12px; }
+        @keyframes panic { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .last-minute { color: var(--red); animation: panic 0.8s infinite; }
+    </style>
 </head>
 <body class="p-4">
-
-  <header class="card flex items-center justify-between px-6 py-4 mb-4">
-    <div>
-      <h1 class="text-xl font-black tracking-tighter text-cyan-400">UNDERDOG HUNTER <span class="text-xs font-normal text-slate-500 ml-2">v1.0 Fixed $1</span></h1>
-      <p class="text-xs text-slate-500" id="market-question">Esperando mercado activo...</p>
-    </div>
-    <div class="flex gap-8">
-      <div class="text-right">
-        <p class="text-[10px] text-slate-500 uppercase">Capital Actual</p>
-        <p class="text-2xl font-bold text-white" id="equity">$0.00</p>
-      </div>
-      <div class="flex items-center gap-2">
-        <span class="status-dot status-wait" id="status-dot"></span>
-        <span class="text-xs font-bold uppercase tracking-widest" id="status-label">Offline</span>
-      </div>
-    </div>
-  </header>
-
-  <div class="grid grid-cols-12 gap-4">
-    
-    <div class="col-span-12 lg:col-span-4 space-y-4">
-      
-      <div class="card p-6 flex flex-col items-center justify-center text-center">
-        <p class="text-xs text-slate-500 mb-2 uppercase tracking-widest">Tiempo para el cierre</p>
-        <div class="text-6xl font-black tabular-nums" id="timer">00:00</div>
-        <p class="text-xs mt-2 text-slate-400" id="timer-msg">Esperando ventana de entrada...</p>
-      </div>
-
-      <div class="card p-4">
-        <p class="text-xs text-slate-500 mb-4 uppercase tracking-widest text-center">Monitor de Probabilidades</p>
-        <div class="grid grid-cols-2 gap-4">
-          <div id="box-up" class="price-box p-4 rounded-lg text-center bg-slate-900/50">
-            <p class="text-xs text-slate-400 mb-1">Token UP</p>
-            <p class="text-3xl font-bold" id="price-up">0.00</p>
-          </div>
-          <div id="box-down" class="price-box p-4 rounded-lg text-center bg-slate-900/50">
-            <p class="text-xs text-slate-400 mb-1">Token DOWN</p>
-            <p class="text-3xl font-bold" id="price-down">0.00</p>
-          </div>
+    <header class="card flex justify-between p-6 mb-4">
+        <div>
+            <h1 class="text-xl font-bold text-cyan-400 uppercase tracking-tighter">Underdog Hunter</h1>
+            <p id="market-question" class="text-xs text-slate-500">Buscando mercado...</p>
         </div>
-        <p class="text-[10px] text-center mt-4 text-slate-600">Objetivo: Comprar si el precio está entre 0.05 y 0.15</p>
-      </div>
+        <div class="text-right">
+            <p class="text-[10px] text-slate-500 uppercase">Capital</p>
+            <p id="equity" class="text-2xl font-bold">$0.00</p>
+        </div>
+    </header>
+
+    <div class="grid grid-cols-12 gap-4">
+        <div class="col-span-4 space-y-4">
+            <div class="card p-6 text-center">
+                <div id="timer" class="text-6xl font-black">0:00</div>
+                <p id="timer-msg" class="text-[10px] text-slate-400 mt-2">ESPERANDO...</p>
+            </div>
+            <div class="card p-4 grid grid-cols-2 gap-4">
+                <div id="box-up" class="p-4 rounded bg-slate-900/50 text-center">
+                    <p class="text-[10px] text-slate-500">UP</p>
+                    <p id="price-up" class="text-2xl font-bold">0.000</p>
+                </div>
+                <div id="box-down" class="p-4 rounded bg-slate-900/50 text-center">
+                    <p class="text-[10px] text-slate-500">DOWN</p>
+                    <p id="price-down" class="text-2xl font-bold">0.000</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-span-8 space-y-4">
+            <div class="card p-6 min-h-[140px]">
+                <div id="no-trade-msg" class="text-center text-slate-500 mt-6">SIN POSICIÓN ACTIVA</div>
+                <div id="trade-data" class="hidden flex justify-between">
+                    <div>
+                        <span class="bg-cyan-500 text-black px-2 py-0.5 text-[10px] font-bold rounded">ACTIVO</span>
+                        <p id="at-direction" class="text-3xl font-bold mt-2">UP</p>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-[10px] text-slate-500 uppercase">Precio Entrada</p>
+                        <p id="at-entry" class="text-2xl font-mono">0.000</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card p-4 h-64 flex flex-col">
+                <p class="text-xs font-bold text-slate-500 uppercase mb-3">Historial de Operaciones</p>
+                <div id="trade-log" class="overflow-y-auto space-y-2 text-[11px]">
+                    <div class="text-slate-600">Sincronizando...</div>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <div class="col-span-12 lg:col-span-8 space-y-4">
-      
-      <div id="active-trade-card" class="card p-6 border-l-4 border-l-slate-700">
-        <div id="no-trade-msg" class="text-center py-8 text-slate-500 uppercase text-sm tracking-widest">
-          Buscando oportunidad de último minuto...
-        </div>
-        
-        <div id="trade-data" class="hidden">
-          <div class="flex justify-between items-start mb-6">
-            <div>
-              <span class="bg-cyan-500 text-black text-[10px] font-bold px-2 py-1 rounded">POSICIÓN ABIERTA</span>
-              <h2 class="text-2xl font-bold mt-2" id="at-direction">UP</h2>
-            </div>
-            <div class="text-right">
-              <p class="text-xs text-slate-500">Precio Entrada</p>
-              <p class="text-xl font-mono" id="at-entry">0.00</p>
-            </div>
-          </div>
-          
-          <div class="grid grid-cols-3 gap-4 border-t border-slate-800 pt-4">
-            <div>
-              <p class="text-[10px] text-slate-500">INVERSIÓN</p>
-              <p class="text-lg font-bold">$1.00</p>
-            </div>
-            <div>
-              <p class="text-[10px] text-slate-500">RESULTADO PROYECTADO</p>
-              <p class="text-lg font-bold text-green-400" id="at-potential">+$0.00</p>
-            </div>
-            <div>
-              <p class="text-[10px] text-slate-500">ESTADO</p>
-              <p class="text-lg font-bold animate-pulse text-yellow-500">ESPERANDO...</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="card p-4 h-64 overflow-hidden flex flex-col">
-        <p class="text-xs text-slate-500 mb-3 uppercase">Historial de Operaciones</p>
-        <div id="trade-log" class="space-y-2 overflow-y-auto text-xs font-mono">
-          <div class="text-slate-600 italic">Iniciando sistema...</div>
-        </div>
-      </div>
-
-    </div>
-  </div>
-
-  <script>
-    const $ = id => document.getElementById(id);
-    const ws_proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    let ws;
-
-    function connect() {
-      ws = new WebSocket(`${ws_proto}//${location.host}/ws`);
-      ws.onmessage = e => {
-        const data = JSON.parse(e.data);
-        updateUI(data);
-      };
-      ws.onclose = () => setTimeout(connect, 2000);
-    }
-
-    function updateUI(s) {
-      // 1. Status y Header
-      if (s.status === 'active') {
-        $('status-dot').className = 'status-dot status-run';
-        $('status-label').textContent = 'Escaneando';
-      }
-
-      // 2. Mercado y Timer
-      if (s.market) {
-        $('market-question').textContent = s.market.question || "Buscando mercado...";
-        const secs = s.market.seconds_remaining;
-        
-        if (secs !== null) {
-          const m = Math.floor(secs / 60);
-          const ss = Math.round(secs % 60);
-          $('timer').textContent = `${m}:${ss.toString().padStart(2, '0')}`;
-          
-          // Estilo de alerta en el último minuto
-          if (secs <= 60) {
-            $('timer').classList.add('last-minute');
-            $('timer-msg').textContent = "¡VENTANA DE ENTRADA ABIERTA!";
-          } else {
-            $('timer').classList.remove('last-minute');
-            $('timer-msg').textContent = "Esperando el último minuto...";
-          }
+    <script>
+        const $ = id => document.getElementById(id);
+        let ws;
+        function connect() {
+            ws = new WebSocket(`${location.protocol==='https:'?'wss:':'ws:'}//${location.host}/ws`);
+            ws.onmessage = e => {
+                const s = JSON.parse(e.data);
+                if (s.market) {
+                    $('market-question').textContent = s.market.question;
+                    const secs = s.market.seconds_remaining;
+                    if (secs !== null && !isNaN(secs)) {
+                        $('timer').textContent = `${Math.floor(secs/60)}:${Math.round(secs%60).toString().padStart(2,'0')}`;
+                        if (secs <= 60) { $('timer').className = 'text-6xl font-black last-minute'; $('timer-msg').textContent = "VENTANA ABIERTA"; }
+                        else { $('timer').className = 'text-6xl font-black'; $('timer-msg').textContent = "ESPERANDO..."; }
+                    }
+                    $('price-up').textContent = (s.market.up_price || 0).toFixed(3);
+                    $('price-down').textContent = (s.market.down_price || 0).toFixed(3);
+                }
+                if (s.portfolio) {
+                    $('equity').textContent = `$${s.portfolio.capital.toFixed(2)}`;
+                    if (s.portfolio.active_trade) {
+                        $('no-trade-msg').classList.add('hidden'); $('trade-data').classList.remove('hidden');
+                        $('at-direction').textContent = s.portfolio.active_trade.direction;
+                        $('at-entry').textContent = s.portfolio.active_trade.entry_price.toFixed(3);
+                    } else {
+                        $('no-trade-msg').classList.remove('hidden'); $('trade-data').classList.add('hidden');
+                    }
+                    if (s.portfolio.history) {
+                        $('trade-log').innerHTML = s.portfolio.history.map(t => `
+                            <div class="flex justify-between p-2 bg-slate-900/40 border border-slate-800 rounded">
+                                <span class="font-bold ${t.status==='WIN'?'text-green-400':'text-red-400'}">${t.status}</span>
+                                <span class="text-slate-400">${t.entry_time}</span>
+                                <span class="text-slate-200">${t.direction} @ ${t.entry_price.toFixed(3)}</span>
+                                <span class="font-bold ${t.pnl>=0?'text-green-400':'text-red-400'}">${t.pnl>=0?'+':''}${t.pnl.toFixed(2)}</span>
+                            </div>
+                        `).join('');
+                    }
+                }
+            };
+            ws.onclose = () => setTimeout(connect, 2000);
         }
-
-        // Precios
-        const up = s.market.up_price || 0;
-        const down = s.market.down_price || 0;
-        $('price-up').textContent = up.toFixed(3);
-        $('price-down').textContent = down.toFixed(3);
-
-        // Resaltar si están en rango
-        $('box-up').className = (up > 0.05 && up <= 0.15) ? 'price-box p-4 rounded-lg text-center price-target' : 'price-box p-4 rounded-lg text-center bg-slate-900/50';
-        $('box-down').className = (down > 0.05 && down <= 0.15) ? 'price-box p-4 rounded-lg text-center price-target' : 'price-box p-4 rounded-lg text-center bg-slate-900/50';
-      }
-
-      // 3. Portafolio y Trade Activo
-      if (s.portfolio) {
-        $('equity').textContent = `$${s.portfolio.capital.toFixed(2)}`;
-        
-        if (s.portfolio.active_trade) {
-          $('no-trade-msg').classList.add('hidden');
-          $('trade-data').classList.remove('hidden');
-          
-          const t = s.portfolio.active_trade;
-          $('at-direction').textContent = t.direction;
-          $('at-direction').className = `text-2xl font-bold mt-2 ${t.direction === 'UP' ? 'text-green-400' : 'text-red-400'}`;
-          $('at-entry').textContent = t.entry_price.toFixed(3);
-          
-          // Cálculo simple de retorno: (1 / precio) - 1 (inversión)
-          const potential = (1.0 / t.entry_price) - 1.0;
-          $('at-potential').textContent = `+$${potential.toFixed(2)}`;
-        } else {
-          $('no-trade-msg').classList.remove('hidden');
-          $('trade-data').classList.add('hidden');
-        }
-      }
-    }
-
-    // Iniciar
-    connect();
-  </script>
+        connect();
+    </script>
 </body>
 </html>
