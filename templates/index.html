@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BTC Strategy v3 Dashboard</title>
+  <title>SOL Strategy v9 — Momentum Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
@@ -87,7 +87,7 @@
   <header class="card flex items-center justify-between px-4 py-3 mb-3">
     <div class="flex items-center gap-3">
       <div>
-        <div class="text-xs text-slate-500">POLYMARKET CLOB · BTC v3 · Precios Reales</div>
+        <div class="text-xs text-slate-500">POLYMARKET · SOL v9 Momentum · entrada 0.65–0.88 · TP@0.90 · SL@0.50</div>
         <div class="text-sm font-bold text-cyan-400" id="market-question">Conectando...</div>
       </div>
     </div>
@@ -180,7 +180,7 @@
 
     <!-- Portfolio Stats -->
     <div class="col-span-4 card p-4">
-      <div class="text-xs text-slate-500 mb-3">SIMULACIÓN PORTAFOLIO ($100 · 2%/trade)</div>
+      <div class="text-xs text-slate-500 mb-3">SIMULACIÓN PORTAFOLIO ($100 · 2%/trade) — Momentum v9</div>
       <div class="grid grid-cols-2 gap-3 mb-3">
         <div>
           <div class="stat-label">Equity</div>
@@ -284,8 +284,8 @@
             <span id="at-partial-pnl" class="font-mono font-bold">—</span>
           </div>
           <div class="flex justify-between mt-1">
-            <span class="text-slate-400">Resto → resolución binaria</span>
-            <span style="color:var(--cyan)">50% esperando expiración</span>
+            <span class="text-slate-400">50% restante → binario (0 ó 1)</span>
+            <span style="color:var(--cyan)">50% → resolución binaria</span>
           </div>
         </div>
       </div>
@@ -517,9 +517,9 @@
     card.className = card.className.replace(/signal-\w+/g, '').trim() + ' ' + animCls;
 
     $('signal-desc').textContent = isUp
-      ? 'Presión compradora dominante → sube'
-      : isDown ? 'Presión vendedora dominante → baja'
-      : 'Sin señal clara – fuera del umbral';
+      ? 'Token dominante UP → momentum hacia 1.0'
+      : isDown ? 'Token dominante DOWN → momentum hacia 1.0'
+      : 'Sin señal — esperando momentum claro';
 
     const conf = sig.confidence || 50;
     $('conf-pct').textContent    = conf + '%';
@@ -663,14 +663,14 @@
       }
 
       // ── Barra TP/SL — calculada 100% en el cliente ───────────────────────
-      const sl = at.sl_price || 0.10;
-      const tp = at.tp_price || 0.47;
+      const sl = at.sl_price || 0.50;
+      const tp = at.tp_price || 0.90;
       // Precio actual real: usar depth si disponible, sino mid
       const cp = (at.real_current_price !== null && at.real_current_price !== undefined)
                  ? at.real_current_price
                  : at.current_price;
 
-      const range    = tp - sl;                            // ej: 0.47-0.10 = 0.37
+      const range    = tp - sl;                            // ej: 0.90-0.50 = 0.40
       const cpClamped = Math.max(sl, Math.min(tp, cp));   // cp dentro del rango
 
       // % de 0→100 donde 0=SL y 100=TP
