@@ -44,17 +44,19 @@ INITIAL_CAPITAL  = 100.0
 TRADE_PCT        = 0.04       # 4% por trade: tamaño mayor porque el riesgo es asimétrico
 
 # ── Filtros de entrada ─────────────────────────────────────────────────────────
-MIN_ENTRY_PRICE  = 0.15       # no entrar por debajo de 15¢ (demasiado extremo)
-MAX_ENTRY_PRICE  = 0.35       # zona barata: solo entrar si token < 35¢
-MAX_ENTRY_SPREAD = 0.08       # spread máximo tolerable al entrar
-MIN_SECS_TO_ENTER = 60        # no entrar si quedan menos de 60s (mercado decidió)
-MAX_SECS_TO_ENTER = 240       # no entrar después de los primeros 4 minutos
+MIN_ENTRY_PRICE   = 0.15      # no entrar por debajo de 15¢ (muy extremo, raro)
+MAX_ENTRY_PRICE   = 0.35      # zona barata: solo entrar si token < 35¢
+MAX_ENTRY_SPREAD  = 0.08      # spread máximo tolerable al entrar
+
+# Ventana de entrada: solo primeros 2 minutos del ciclo de 5min
+# Observación empírica: minuto 3+ el mercado ya casi decidió → no tocar
+MIN_SECS_TO_ENTER = 180       # no entrar si quedan menos de 3 minutos (minuto 3+)
+MAX_SECS_TO_ENTER = 300       # entrar desde el primer segundo del ciclo
 
 # ── Salida ─────────────────────────────────────────────────────────────────────
 TARGET_PRICE     = 0.47       # TP parcial: vender 50% cuando llega cerca de 0.50
 PARTIAL_EXIT_PCT = 0.50       # porcentaje a vender en el TP parcial
-SL_PRICE_ABS     = 0.10       # SL absoluto: si el token cae a 10¢, cortar todo
-                               # (significa que el mercado decidió muy en contra)
+SL_PRICE_ABS     = 0.10       # SL absoluto: token a 10¢ = mercado decidió muy en contra
 
 # ── Fee model ──────────────────────────────────────────────────────────────────
 FEE_RATE = 0.0625   # fee = p × (1-p) × FEE_RATE
@@ -500,16 +502,24 @@ class Portfolio:
             cp = self.current_price_for_trade(up_price, down_price)
             active = {
                 **t.to_dict(),
-                "current_price":     round(cp, 4),
-                "mark_to_market":    t.mark_to_market(cp),
-                "unrealized_pnl":    t.unrealized_pnl(cp),
-                "target_price":      TARGET_PRICE,
-                "sl_price":          SL_PRICE_ABS,
-                "dist_to_target":    round(TARGET_PRICE - cp, 4),
-                "dist_to_sl":        round(cp - SL_PRICE_ABS, 4),
-                "partial_exit_done": t.partial_exit_done,
+                "current_price":      round(cp, 4),
+                "mark_to_market":     t.mark_to_market(cp),
+                "unrealized_pnl":     t.unrealized_pnl(cp),
+                "target_price":       TARGET_PRICE,
+                "tp_price":           TARGET_PRICE,   # alias para compatibilidad con frontend
+                "sl_price":           SL_PRICE_ABS,
+                "dist_to_target":     round(TARGET_PRICE - cp, 4) if not t.partial_exit_done else None,
+                "dist_to_sl":         round(cp - SL_PRICE_ABS, 4),
+                "partial_exit_done":  t.partial_exit_done,
                 "partial_exit_price": t.partial_exit_price,
-                "partial_pnl":       t.partial_pnl,
+                "partial_pnl":        t.partial_pnl,
+                # P&L potencial si llega a target o SL (para display)
+                "tp_pnl":  round(t.shares * TARGET_PRICE - t.bet_size - t.entry_fee
+                                 - estimate_fee(TARGET_PRICE, t.shares * TARGET_PRICE), 4)
+                           if not t.partial_exit_done else None,
+                "sl_pnl":  round(t.shares * SL_PRICE_ABS - t.bet_size - t.entry_fee
+                                 - estimate_fee(SL_PRICE_ABS, t.shares * SL_PRICE_ABS), 4)
+                           if not t.partial_exit_done else None,
             }
 
         exit_reasons: dict = {}
