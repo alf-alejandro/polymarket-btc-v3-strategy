@@ -305,15 +305,17 @@ class Portfolio:
         trade         = self.active_trade
         current_price = self.current_price_for_trade(up_price, down_price)
 
-        # 1. TP parcial — token llegó a 0.47+
+        # 1. TP parcial — token llegó a 0.90+
         if trade.should_partial_exit(current_price):
             return "PARTIAL_TP"
 
-        # 2. SL — token cayó a 0.10 o menos
-        if trade.should_sl(current_price):
+        # 2. SL — solo si el parcial AÚN NO se ha hecho
+        # Una vez hecho el TP parcial, el 50% restante va directo a resolución binaria
+        # No tiene sentido cortar con SL cuando ya aseguraste ganancia en el parcial
+        if not trade.partial_exit_done and trade.should_sl(current_price):
             return "SL"
 
-        # El 50% restante espera resolución binaria — sin cierre anticipado por tiempo
+        # Tras el parcial: esperar expiración binaria (0 o 1) — sin más exits
         return None
 
     # ── Ejecutar salidas ──────────────────────────────────────────────────────
