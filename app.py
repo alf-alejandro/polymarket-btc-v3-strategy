@@ -1,5 +1,5 @@
 """
-app.py — FastAPI server + loop de estrategia corregido (Underdog $1)
+app.py — Versión con Historial de Trades Activado
 """
 import asyncio
 import logging
@@ -47,7 +47,7 @@ async def strategy_loop():
     saved = database.load_state()
     portfolio = Portfolio(db=database)
     portfolio.restore(saved)
-    log.info(f"Sistema iniciado. Capital base: ${portfolio.capital}")
+    log.info(f"Sistema iniciado. Capital: ${portfolio.capital}")
 
     market_info = None
     last_market_id = None
@@ -65,7 +65,6 @@ async def strategy_loop():
                 last_market_id = market_info["condition_id"]
                 log.info(f"Monitoreando: {market_info['question']}")
 
-            # Actualizar Precios
             up_ob, down_ob, err = await asyncio.to_thread(
                 get_dual_book_metrics,
                 market_info["up_token_id"],
@@ -76,13 +75,11 @@ async def strategy_loop():
                 market_info["up_price"] = up_ob["vwap_mid"]
                 market_info["down_price"] = round(1 - up_ob["vwap_mid"], 4)
 
-            # CALCULAR TIEMPO (Crucial para el Dashboard)
             secs_left = seconds_remaining(market_info)
             market_info["seconds_remaining"] = secs_left
 
-            # Lógica de Entrada (Underdog)
+            # Lógica de Entrada Underdog
             if secs_left is not None and not portfolio.active_trade:
-                # bet_size fijo a 1.0 para evitar errores de cálculo
                 entered = portfolio.consider_entry(
                     {}, 
                     market_info["question"],
@@ -92,20 +89,20 @@ async def strategy_loop():
                 )
                 if entered:
                     t = portfolio.active_trade
-                    log.info(f"!!! COMPRA EJECUTADA !!! {t.direction} a {t.entry_price}")
+                    log.info(f"COMPRA: {t.direction} a {t.entry_price}")
 
-            # Lógica de Cierre (Expiración)
+            # Lógica de Cierre
             if secs_left is not None and secs_left < 5 and portfolio.active_trade:
-                closed = portfolio.close_trade(market_info["up_price"], market_info["down_price"])
-                if closed:
-                    log.info(f"RESULTADO: {closed.status} | P&L: {closed.pnl}")
+                portfolio.close_trade(market_info["up_price"], market_info["down_price"])
 
-            # Preparar datos para el Dashboard
+            # ── PREPARAR DATOS PARA EL DASHBOARD (CON HISTORIAL) ──
             state["status"] = "active"
             state["market"] = market_info
             state["portfolio"] = {
                 "capital": portfolio.capital,
-                "active_trade": portfolio.active_trade.to_dict() if portfolio.active_trade else None
+                "active_trade": portfolio.active_trade.to_dict() if portfolio.active_trade else None,
+                # Enviamos los últimos 10 trades cerrados
+                "history": [t.to_dict() for t in reversed(portfolio.closed_trades[-10:])]
             }
 
             await broadcast(state)
@@ -119,14 +116,13 @@ async def strategy_loop():
             log.error(f"Error en loop: {e}")
             await asyncio.sleep(5)
 
-# ── Servidor FastAPI ──────────────────────────────────────────────────────────
+# ── Servidor ──
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     asyncio.create_task(strategy_loop())
     yield
 
 app = FastAPI(lifespan=lifespan)
-
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
