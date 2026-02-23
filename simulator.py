@@ -15,15 +15,15 @@ from typing import Optional
 INITIAL_CAPITAL  = 100.0
 TRADE_PCT        = 0.02      # 2% of capital per trade
 MIN_CONFIDENCE   = 65
-ENTRY_AFTER_N    = 6         # consecutive aligned snaps required to enter
+ENTRY_AFTER_N    = 6         # consecutive aligned snaps required to enter (Subido a 6 para mayor seguridad)
 
 # Entry filters (realistic price guards)
-MIN_ENTRY_PRICE  = 0.20      # skip tokens below 10¢ (huge spread, lottery-ticket probability)
-MAX_ENTRY_SPREAD = 0.12      # skip when (ask-bid)/ask > 25% → SL would fire on 1st snapshot
+MIN_ENTRY_PRICE  = 0.20      # skip tokens below 20¢ (huge spread, lottery-ticket probability)
+MAX_ENTRY_SPREAD = 0.12      # skip when (ask-bid)/ask > 12% → SL would fire on 1st snapshot
 
 # v2 exit parameters
 TAKE_PROFIT_MULT = 3.0       # TP when unrealized >= bet * 3
-STOP_LOSS_PCT    = 0.65      # SL when unrealized <= -(bet * 0.50)
+STOP_LOSS_PCT    = 0.65      # SL when unrealized <= -(bet * 0.65) (Corregido al 65% real)
 SIGNAL_EXIT_N    = 5         # exit after N consecutive opposing signal snaps
 LATE_EXIT_SECS   = 45        # exit in last 45 s with any profit
 
@@ -340,9 +340,6 @@ class Portfolio:
         if self.active_trade:
             t  = self.active_trade
             cp = self.current_price_for_trade(up_price, down_price)
-            # Price levels for TP/SL
-            # upnl = shares*cp - bet >= bet*TP_MULT  →  cp >= entry*(1+TP_MULT)
-            # upnl = shares*cp - bet <= -bet*SL_PCT  →  cp <= entry*(1-SL_PCT)
             tp_price = round(t.entry_price * (1 + TAKE_PROFIT_MULT), 4)
             sl_price = round(t.entry_price * (1 - STOP_LOSS_PCT), 4)
             tp_pnl   = round(t.bet_size * TAKE_PROFIT_MULT, 4)
@@ -364,7 +361,6 @@ class Portfolio:
                 "opposing_streak": self._opposing_streak,
             }
 
-        # Exit reason breakdown
         exit_reasons: dict = {}
         for t in closed:
             r = t.exit_reason or "EXPIRE"
