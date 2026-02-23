@@ -29,7 +29,7 @@ from strategy_core import (
     SLOT_STEP,
 )
 from price_feed import PriceFeed
-from simulator import Portfolio
+from simulator import Portfolio, PARTIAL_EXIT_PCT
 import db as database
 
 # ── Depth walk helpers ────────────────────────────────────────────────────────
@@ -272,13 +272,14 @@ async def strategy_loop():
                     secs_left,
                 )
                 if reason == "PARTIAL_TP":
-                    # Salida parcial: vender 50% al mejor bid disponible
+                    # Salida parcial: vender 50% del total de shares al mejor bid
                     at             = portfolio.active_trade
+                    shares_to_sell = round(at.shares * PARTIAL_EXIT_PCT, 4)
                     exit_bid_price = None
                     if book_valid:
                         bids_to_walk = top_bids_up if at.direction == "UP" else top_bids_down
                         if bids_to_walk:
-                            d = _walk_bids_for_exit(bids_to_walk, at.shares_remaining * 0.5)
+                            d = _walk_bids_for_exit(bids_to_walk, shares_to_sell)
                             if d["shares_sold"] > 0:
                                 exit_bid_price = d["avg_price"]
                     partial_pnl = portfolio.apply_partial_exit(
@@ -287,7 +288,7 @@ async def strategy_loop():
                         exit_bid_price=exit_bid_price,
                     )
                     log.info(
-                        f"PARTIAL_TP #{at.id}: precio={exit_bid_price or 'mid':.4f} "
+                        f"PARTIAL_TP #{at.id}: precio={exit_bid_price:.4f} "
                         f"pnl_parcial={partial_pnl:+.4f} | "
                         f"shares restantes={at.shares_remaining:.4f} → esperando resolución"
                     )
