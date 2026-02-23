@@ -1,5 +1,6 @@
 """
 app.py — FastAPI server: WebSocket broadcast + strategy background loop
+v3: Dual book OBI + EMA signal + parámetros calibrados
 """
 
 import asyncio
@@ -22,7 +23,9 @@ from starlette.requests import Request
 
 from strategy_core import (
     find_active_sol_market,
+    get_dual_book_metrics,
     get_order_book_metrics,
+    compute_combined_obi,
     compute_signal,
     seconds_remaining,
     fetch_clob_market,
@@ -37,8 +40,6 @@ import db as database
 # ── Order book depth helpers (display only) ───────────────────────────────────
 
 def _walk_asks_for_entry(top_asks: list, bet_usdc: float) -> dict:
-    """Walk ask levels: how many shares can $bet_usdc actually buy at market?
-    top_asks must be sorted ascending (best/cheapest ask first)."""
     remaining = bet_usdc
     shares = 0.0
     cost = 0.0
@@ -61,8 +62,6 @@ def _walk_asks_for_entry(top_asks: list, bet_usdc: float) -> dict:
 
 
 def _walk_bids_for_exit(top_bids: list, shares_to_sell: float) -> dict:
-    """Walk bid levels: proceeds from selling shares_to_sell tokens at market.
-    top_bids must be sorted descending (best/highest bid first)."""
     remaining = shares_to_sell
     proceeds = 0.0
     for price, size in top_bids:
@@ -84,9 +83,11 @@ def _walk_bids_for_exit(top_bids: list, shares_to_sell: float) -> dict:
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
+# OBI_THRESHOLD más bajo: 0.15 activa señales con desequilibrio moderado pero real
+# En mercados 5min de Polymarket, OBI ±0.35 es raro → threshold 0.15-0.20 es más realista
 POLL_INTERVAL = float(os.environ.get("POLL_INTERVAL", "3"))
-OBI_THRESHOLD = float(os.environ.get("OBI_THRESHOLD", "0.35")) # <-- Modificado de 0.15 a 0.35
-WINDOW_SIZE   = int(os.environ.get("WINDOW_SIZE", "8"))
+OBI_THRESHOLD = float(os.environ.get("OBI_THRESHOLD", "0.18"))   # Bajado de 0.35 → 0.18
+WINDOW_SIZE   = int(os.environ.get("WINDOW_SIZE", "6"))           # Ventana EMA reducida (18s)
 PORT          = int(os.environ.get("PORT", "8000"))
 
 # ── Shared state ──────────────────────────────────────────────────────────────
@@ -98,11 +99,11 @@ state: dict = {
     "signal":    {},
     "portfolio": {},
     "config":    {
-        "threshold":     OBI_THRESHOLD,
-        "window_size":   WINDOW_SIZE,
-        "poll_interval": POLL_INTERVAL,
+        "threshold":       OBI_THRESHOLD,
+        "window_size":     WINDOW_SIZE,
+        "poll_interval":   POLL_INTERVAL,
         "initial_capital": 100.0,
-        "trade_pct":     0.02,
+        "trade_pct":       0.02,
     },
     "status":    "initializing",
     "error":     None,
@@ -124,7 +125,6 @@ async def broadcast(data: dict):
 # ── Strategy loop ─────────────────────────────────────────────────────────────
 
 async def strategy_loop():
-    # Restaurar portafolio desde DB
     saved     = database.load_state()
     portfolio = Portfolio(
         initial_capital = saved["initial_capital"],
@@ -136,11 +136,11 @@ async def strategy_loop():
         f"trades históricos={len(portfolio.closed_trades)}"
     )
 
-    obi_window  = deque(maxlen=WINDOW_SIZE)
-    market_info = None
-    snap        = 0
+    obi_window     = deque(maxlen=WINDOW_SIZE)
+    market_info    = None
+    snap           = 0
     last_market_id = None
-    error_streak   = 0  # consecutive error count → backoff
+    error_streak   = 0
 
     while True:
         try:
@@ -148,10 +148,10 @@ async def strategy_loop():
             if market_info is None:
                 state["status"] = "searching"
                 await broadcast(state)
-                log.info("Searching for active BTC 5min market...")
+                log.info("Searching for active market...")
                 market_info = await asyncio.to_thread(find_active_sol_market)
                 if market_info is None:
-                    state["error"] = "No active BTC market found. Retrying in 15s..."
+                    state["error"] = "No active market found. Retrying in 15s..."
                     log.warning("No market found, retrying in 15s")
                     await asyncio.sleep(15)
                     continue
@@ -164,21 +164,22 @@ async def strategy_loop():
                 obi_window.clear()
                 snap = 0
                 log.info(f"New market cycle: {market_info['question']}")
-                # Close any open trade (market expired)
                 if portfolio.active_trade:
-                    up_p   = market_info["up_price"]
-                    down_p = market_info["down_price"]
-                    portfolio.close_trade(up_p, down_p)
+                    portfolio.close_trade(
+                        market_info["up_price"],
+                        market_info["down_price"],
+                    )
 
-            # ── Get order book ────────────────────────────────────────────────
+            # ── Get DUAL order book (UP + DOWN) ───────────────────────────────
             snap += 1
-            ob, err = await asyncio.to_thread(
-                get_order_book_metrics, market_info["up_token_id"]
+            up_ob, down_ob, err = await asyncio.to_thread(
+                get_dual_book_metrics,
+                market_info["up_token_id"],
+                market_info["down_token_id"],
             )
 
-            if err or ob is None:
+            if err or up_ob is None:
                 err_str = str(err) if err else ""
-                # 404 means market expired → find next slot
                 if "404" in err_str or "No orderbook" in err_str:
                     if portfolio.active_trade:
                         portfolio.close_trade(
@@ -192,7 +193,6 @@ async def strategy_loop():
                     await broadcast(state)
                     await asyncio.sleep(6)
                 else:
-                    # Rate limit (429) or transient error → exponential backoff
                     error_streak += 1
                     wait = min(POLL_INTERVAL * (2 ** (error_streak - 1)), 60)
                     label = "Rate limit" if "429" in err_str else "Error"
@@ -203,47 +203,69 @@ async def strategy_loop():
                     await asyncio.sleep(wait)
                 continue
 
-            # Update market prices
-            error_streak = 0  # successful API call → reset backoff
-            market_info["up_price"]   = ob["vwap_mid"]
-            market_info["down_price"] = round(1 - ob["vwap_mid"], 4)
-            obi_window.append(ob["obi"])
+            error_streak = 0
 
-            # ── Realistic bid/ask depth (used by algo AND display) ────────────
-            # UP token: BUY at best_ask (walk asks), SELL at best_bid (walk bids)
-            # DOWN token prices are the complement of the UP book.
-            up_ask = ob["best_ask"]
-            up_bid = ob["best_bid"]
+            # ── Precios reales desde el libro ─────────────────────────────────
+            up_ask = up_ob["best_ask"]
+            up_bid = up_ob["best_bid"]
             book_valid = up_ask > 0.005 and up_bid > 0.005 and up_ask > up_bid
-            down_ask = round(1 - up_bid, 4) if book_valid else None
-            down_bid = round(1 - up_ask, 4) if book_valid else None
-            top_asks_up = ob.get("top_asks", [])   # ascending  (best ask first)
-            top_bids_up = ob.get("top_bids", [])   # descending (best bid first)
-            # DOWN asks = complement of UP bids (ascending ✓)
-            down_asks_lv = [(round(1 - p, 4), s) for p, s in top_bids_up] if book_valid else []
-            # DOWN bids  = complement of UP asks (descending ✓)
-            down_bids_lv = [(round(1 - p, 4), s) for p, s in top_asks_up] if book_valid else []
 
-            # ── Signal ────────────────────────────────────────────────────────
-            signal = compute_signal(ob["obi"], list(obi_window), OBI_THRESHOLD)
+            # DOWN token tiene su propio libro; si lo tenemos, usamos sus precios reales
+            if down_ob:
+                down_ask = down_ob["best_ask"]
+                down_bid = down_ob["best_bid"]
+                # Actualizar precios del mercado con mid real de cada libro
+                market_info["up_price"]   = round((up_bid + up_ask) / 2, 4)
+                market_info["down_price"] = round((down_bid + down_ask) / 2, 4)
+            else:
+                # Fallback: complemento del UP
+                down_ask = round(1 - up_bid, 4) if book_valid else None
+                down_bid = round(1 - up_ask, 4) if book_valid else None
+                market_info["up_price"]   = up_ob["vwap_mid"]
+                market_info["down_price"] = round(1 - up_ob["vwap_mid"], 4)
 
-            # --- NUEVO: FILTRO DURO DE SPREAD ANTES DE ENTRAR ---
-            if book_valid:
-                up_spread_pct = (up_ask - up_bid) / up_ask if up_ask > 0 else 1.0
-                down_spread_pct = (down_ask - down_bid) / down_ask if down_ask > 0 else 1.0
-                
+            top_asks_up = up_ob.get("top_asks", [])
+            top_bids_up = up_ob.get("top_bids", [])
+
+            if down_ob:
+                top_asks_down = down_ob.get("top_asks", [])
+                top_bids_down = down_ob.get("top_bids", [])
+            else:
+                # Complemento del UP book (precio = 1 - precio_UP)
+                top_asks_down = [(round(1 - p, 4), s) for p, s in top_bids_up] if book_valid else []
+                top_bids_down = [(round(1 - p, 4), s) for p, s in top_asks_up] if book_valid else []
+
+            # ── OBI combinado ─────────────────────────────────────────────────
+            combined_obi = compute_combined_obi(up_ob, down_ob)
+            obi_window.append(combined_obi)
+
+            # ── Signal con EMA + depth_pressure ──────────────────────────────
+            signal = compute_signal(
+                combined_obi,
+                list(obi_window),
+                OBI_THRESHOLD,
+                up_ob=up_ob,
+                down_ob=down_ob,
+            )
+
+            # ── Filtro duro de spread (por dirección) ─────────────────────────
+            if book_valid and signal.get("label") not in ("NEUTRAL",):
                 sig_label = signal.get("label", "")
-                if "UP" in sig_label and up_spread_pct > 0.12:
-                    log.info(f"Ignorando {sig_label}: Spread UP del {up_spread_pct*100:.1f}% es demasiado alto.")
-                    signal["label"] = "NEUTRAL"
-                elif "DOWN" in sig_label and down_spread_pct > 0.12:
-                    log.info(f"Ignorando {sig_label}: Spread DOWN del {down_spread_pct*100:.1f}% es demasiado alto.")
-                    signal["label"] = "NEUTRAL"
+                if "UP" in sig_label:
+                    sp = (up_ask - up_bid) / up_ask if up_ask > 0 else 1.0
+                    if sp > 0.10:
+                        log.info(f"Ignorando {sig_label}: spread UP {sp*100:.1f}% > 10%")
+                        signal["label"] = "NEUTRAL"
+                elif "DOWN" in sig_label and down_ob:
+                    sp = (down_ask - down_bid) / down_ask if down_ask and down_ask > 0 else 1.0
+                    if sp > 0.10:
+                        log.info(f"Ignorando {sig_label}: spread DOWN {sp*100:.1f}% > 10%")
+                        signal["label"] = "NEUTRAL"
 
             # ── Simulation ────────────────────────────────────────────────────
             secs_left = seconds_remaining(market_info)
 
-            # v2: smart exits — use depth-walked bid price for realistic P&L
+            # Smart exits
             if portfolio.active_trade and secs_left is not None and secs_left > 0:
                 reason = portfolio.check_exits(
                     signal,
@@ -259,8 +281,8 @@ async def strategy_loop():
                             d = _walk_bids_for_exit(top_bids_up, at.shares)
                             if d["shares_sold"] > 0:
                                 exit_bid_price = d["avg_price"]
-                        elif at.direction == "DOWN" and down_bids_lv:
-                            d = _walk_bids_for_exit(down_bids_lv, at.shares)
+                        elif at.direction == "DOWN" and top_bids_down:
+                            d = _walk_bids_for_exit(top_bids_down, at.shares)
                             if d["shares_sold"] > 0:
                                 exit_bid_price = d["avg_price"]
                     exited = portfolio.exit_at_market_price(
@@ -277,13 +299,17 @@ async def strategy_loop():
                             f"pnl={exited.pnl:+.4f}"
                         )
 
-            # Try entering a trade (only when market has >60s remaining)
+            # Try entering a trade (solo si quedan >60s)
             if secs_left is not None and secs_left > 60:
                 bet_size = round(portfolio.capital * 0.02, 2)
                 entry_depth_up   = _walk_asks_for_entry(top_asks_up, bet_size) \
                                    if book_valid and top_asks_up and bet_size > 0 else None
-                entry_depth_down = _walk_asks_for_entry(down_asks_lv, bet_size) \
-                                   if book_valid and down_asks_lv and bet_size > 0 else None
+                entry_depth_down = _walk_asks_for_entry(top_asks_down, bet_size) \
+                                   if book_valid and top_asks_down and bet_size > 0 else None
+
+                up_bid_entry   = up_bid if book_valid else None
+                down_bid_entry = down_bid if book_valid and down_ob else None
+
                 portfolio.consider_entry(
                     signal,
                     market_info["question"],
@@ -291,24 +317,23 @@ async def strategy_loop():
                     market_info["down_price"],
                     entry_depth_up=entry_depth_up,
                     entry_depth_down=entry_depth_down,
-                    up_bid=up_bid if book_valid else None,
-                    down_bid=down_bid if book_valid else None,
+                    up_bid=up_bid_entry,
+                    down_bid=down_bid_entry,
                 )
 
-            # Emergency binary close: market expiring with open trade
+            # Emergency binary close
             if secs_left is not None and secs_left < 5 and portfolio.active_trade:
                 portfolio.close_trade(
                     market_info["up_price"],
                     market_info["down_price"],
                 )
 
-            # Detect market expiry → search next
             if secs_left is not None and secs_left <= 0:
                 market_info = None
                 await asyncio.sleep(5)
                 continue
 
-            # ── Refresh accepting_orders status ───────────────────────────────
+            # Refresh accepting_orders status
             if snap % 5 == 0:
                 fresh = await asyncio.to_thread(
                     fetch_clob_market, market_info["condition_id"]
@@ -322,18 +347,18 @@ async def strategy_loop():
                 market_info["down_price"],
             )
 
-            # ── Realistic exit depth for active trade (display) ───────────────
+            # Realistic exit depth for active trade (display)
             if portfolio.active_trade and portfolio_stats.get("active_trade"):
                 at = portfolio.active_trade
                 exit_depth = None
                 if book_valid:
                     if at.direction == "UP" and top_bids_up:
                         exit_depth = _walk_bids_for_exit(top_bids_up, at.shares)
-                    elif at.direction == "DOWN" and down_bids_lv:
-                        exit_depth = _walk_bids_for_exit(down_bids_lv, at.shares)
+                    elif at.direction == "DOWN" and top_bids_down:
+                        exit_depth = _walk_bids_for_exit(top_bids_down, at.shares)
 
                 if exit_depth and exit_depth["shares_sold"] > 0:
-                    sim_upnl = portfolio_stats["active_trade"].get("unrealized_pnl", 0)
+                    sim_upnl  = portfolio_stats["active_trade"].get("unrealized_pnl", 0)
                     real_upnl = round(exit_depth["proceeds"] - at.bet_size, 4)
                     portfolio_stats["active_trade"]["real_current_price"]  = exit_depth["avg_price"]
                     portfolio_stats["active_trade"]["real_unrealized_pnl"] = real_upnl
@@ -346,7 +371,7 @@ async def strategy_loop():
                     portfolio_stats["active_trade"]["exit_depth"]          = None
 
                 portfolio_stats["active_trade"]["real_entry_cost"] = (
-                    up_ask if at.direction == "UP" else down_ask
+                    up_ask if at.direction == "UP" else (down_ask or None)
                 )
 
             state["status"]    = "running"
@@ -356,14 +381,16 @@ async def strategy_loop():
             state["market"]    = {
                 **market_info,
                 "seconds_remaining": round(secs_left, 1) if secs_left is not None else None,
-                "up_ask":   up_ask,    # precio real para COMPRAR UP
-                "up_bid":   up_bid,    # precio real al VENDER UP
-                "down_ask": down_ask,  # precio real para COMPRAR DOWN
-                "down_bid": down_bid,  # precio real al VENDER DOWN
+                "up_ask":   up_ask,
+                "up_bid":   up_bid,
+                "down_ask": down_ask,
+                "down_bid": down_bid,
             }
-            state["orderbook"] = ob
-            state["signal"]    = signal
-            state["portfolio"] = portfolio_stats
+            # Exportamos ambos libros al frontend
+            state["orderbook"]      = up_ob
+            state["orderbook_down"] = down_ob or {}
+            state["signal"]         = signal
+            state["portfolio"]      = portfolio_stats
 
             await broadcast(state)
 
@@ -373,7 +400,7 @@ async def strategy_loop():
             log.exception(f"Strategy loop error (streak={error_streak}): {exc}")
             state["status"] = "error"
             state["error"]  = str(exc)
-            market_info = None  # force re-search on next iteration
+            market_info = None
             await broadcast(state)
             await asyncio.sleep(wait)
             continue
@@ -385,7 +412,6 @@ async def strategy_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Inicializar DB antes de arrancar el loop
     database.init_db()
     log.info(f"DB path: {database.db_path()}")
     task = asyncio.create_task(strategy_loop())
@@ -397,7 +423,7 @@ async def lifespan(app: FastAPI):
         pass
 
 
-app       = FastAPI(title="Polymarket BTC Strategy v3", lifespan=lifespan)
+app       = FastAPI(title="Polymarket Strategy v3 – Dual OBI", lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
 
 
@@ -405,7 +431,6 @@ templates = Jinja2Templates(directory="templates")
 
 @app.get("/health")
 async def health():
-    """Endpoint de diagnóstico — útil para verificar Railway."""
     return {
         "status":    "ok",
         "db_path":   database.db_path(),
@@ -429,14 +454,13 @@ async def get_state():
 
 @app.get("/api/trades")
 async def get_all_trades():
-    """Historial completo de trades desde la DB (útil para análisis externo)."""
     saved = await asyncio.to_thread(database.load_state)
     return {
-        "capital":       saved["capital"],
+        "capital":         saved["capital"],
         "initial_capital": saved["initial_capital"],
-        "total_trades":  saved["trade_counter"],
-        "trades":        [t.to_dict() for t in saved["closed_trades"]],
-        "db_path":       database.db_path(),
+        "total_trades":    saved["trade_counter"],
+        "trades":          [t.to_dict() for t in saved["closed_trades"]],
+        "db_path":         database.db_path(),
     }
 
 
@@ -444,11 +468,9 @@ async def get_all_trades():
 async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
     connected.add(websocket)
-    # Send current state immediately
     try:
         await websocket.send_json(state)
         while True:
-            # Keep connection alive; client sends pings
             await asyncio.wait_for(websocket.receive_text(), timeout=30)
     except (WebSocketDisconnect, asyncio.TimeoutError, Exception):
         connected.discard(websocket)
