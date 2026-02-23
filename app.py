@@ -319,7 +319,7 @@ async def strategy_loop():
             # ── Entry: mean reversion — buscar token barato en zona 0.15–0.35 ──
             # El filtro de tiempo y precio está dentro de consider_entry
             if secs_left is not None and not portfolio.active_trade:
-                bet_size         = round(portfolio.capital * 0.04, 2)
+                bet_size         = round(portfolio.capital * portfolio.trade_pct, 2)
                 entry_depth_up   = _walk_asks_for_entry(top_asks_up, bet_size) \
                                    if book_valid and top_asks_up and bet_size > 0 else None
                 entry_depth_down = _walk_asks_for_entry(top_asks_down, bet_size) \
