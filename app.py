@@ -85,7 +85,7 @@ def _walk_bids_for_exit(top_bids: list, shares_to_sell: float) -> dict:
 
 # ── Config ────────────────────────────────────────────────────────────────────
 POLL_INTERVAL = float(os.environ.get("POLL_INTERVAL", "3"))
-OBI_THRESHOLD = float(os.environ.get("OBI_THRESHOLD", "0.15"))
+OBI_THRESHOLD = float(os.environ.get("OBI_THRESHOLD", "0.35"))
 WINDOW_SIZE   = int(os.environ.get("WINDOW_SIZE", "8"))
 PORT          = int(os.environ.get("PORT", "8000"))
 
