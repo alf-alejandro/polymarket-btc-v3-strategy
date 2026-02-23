@@ -1,12 +1,10 @@
-"""simulator.py — Portfolio simulation v8: Mean Reversion
+"""simulator.py — Portfolio simulation v9: Momentum (dirección invertida)
 
-Estrategia: comprar token barato (0.15-0.35) en primeros 2 minutos,
-TP parcial 50% al llegar a 0.47, resto a resolución binaria (0 o 1).
+Estrategia: comprar token DOMINANTE (>0.65) en primeros 2 minutos,
+TP parcial 50% al llegar a 0.90, resto a resolución binaria (0 o 1).
+SL si cae a 0.50 (pierde el momentum — mercado se equilibró).
 
-Fixes v8:
-  - Eliminado cierre anticipado LATE (cerraba antes del binario = perdía ganancia)
-  - unrealized_pnl() ya incluye partial_pnl; stats() NO lo suma por separado
-  - Capital accounting verificado y correcto
+Lógica: el token que ya está ganando tiende a seguir hacia 1.0.
 """
 
 from dataclasses import dataclass, field
@@ -18,8 +16,8 @@ INITIAL_CAPITAL   = 100.0
 TRADE_PCT         = 0.02      # 2% por trade
 
 # ── Filtros de entrada ─────────────────────────────────────────────────────────
-MIN_ENTRY_PRICE   = 0.15      # no entrar por debajo de 15¢
-MAX_ENTRY_PRICE   = 0.35      # zona barata: token < 35¢
+MIN_ENTRY_PRICE   = 0.65      # zona momentum: token > 65¢
+MAX_ENTRY_PRICE   = 0.88      # no entrar si ya está demasiado cerca de 1.0
 MAX_ENTRY_SPREAD  = 0.08      # spread máximo tolerable
 
 # Ventana: solo primeros 2 minutos (observación empírica)
@@ -27,9 +25,9 @@ MIN_SECS_TO_ENTER = 180       # no entrar si quedan < 3 minutos
 MAX_SECS_TO_ENTER = 300       # desde el primer segundo
 
 # ── Salida ─────────────────────────────────────────────────────────────────────
-TARGET_PRICE      = 0.47      # TP parcial: vender 50% cuando token llega a 0.47
+TARGET_PRICE      = 0.90      # TP parcial: vender 50% cuando token llega a 0.90
 PARTIAL_EXIT_PCT  = 0.50      # % a vender en TP parcial
-SL_PRICE_ABS      = 0.10      # SL: si el token cae a 10¢, cortar todo
+SL_PRICE_ABS      = 0.50      # SL: si cae a 0.50 perdió el momentum, cortar todo
 
 # ── Fee model ──────────────────────────────────────────────────────────────────
 FEE_RATE = 0.0625             # fee = p × (1-p) × FEE_RATE
@@ -246,6 +244,7 @@ class Portfolio:
         entry_depth = None
         bid_price   = None
 
+        # Comprar el lado DOMINANTE (>0.65) — momentum hacia 1.0
         if MIN_ENTRY_PRICE <= up_price <= MAX_ENTRY_PRICE:
             direction   = "UP"
             entry_price = up_price
@@ -276,7 +275,7 @@ class Portfolio:
         if shares <= 0:
             return False
 
-        # Verificar que tras el depth walk sigue en zona barata
+        # Verificar que tras el depth walk sigue en zona momentum
         if not (MIN_ENTRY_PRICE <= entry_price <= MAX_ENTRY_PRICE):
             return False
 
@@ -505,7 +504,7 @@ class Portfolio:
             "trade_log":        [t.to_dict() for t in reversed(closed[-20:])],
             "exit_reasons":     exit_reasons,
             "strategy": {
-                "name":             "Mean Reversion v7",
+                "name":             "Momentum v9",
                 "entry_zone":       f"{MIN_ENTRY_PRICE}–{MAX_ENTRY_PRICE}",
                 "target_price":     TARGET_PRICE,
                 "sl_price":         SL_PRICE_ABS,
