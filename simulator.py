@@ -1,55 +1,121 @@
 """
-simulator.py — Portfolio simulation v3: parámetros calibrados para mercados 5min
-  TP      : Take Profit when unrealized >= bet * TAKE_PROFIT_MULT
-  SL      : Stop Loss   when unrealized <= -(bet * STOP_LOSS_PCT)
-  SIGNAL  : Exit after SIGNAL_EXIT_N consecutive opposing OBI snaps
-  LATE    : Exit in last LATE_EXIT_SECS seconds if any profit
-  EXPIRE  : Binary resolution at market expiry (fallback)
+simulator.py — Portfolio simulation v4: TP/SL por movimiento de precio del token
 
-Cambios v3 vs v2:
-  - ENTRY_AFTER_N: 6 → 3 (en 5min cada segundo cuenta)
-  - MIN_CONFIDENCE: 65 → 60 (threshold más bajo genera señales más débiles)
-  - TAKE_PROFIT_MULT: 3.0 → 2.0 (salir más rápido con ganancia real)
-  - STOP_LOSS_PCT: 0.65 → 0.45 (cortar pérdidas antes)
-  - MAX_ENTRY_SPREAD: 0.12 → 0.10 (más estricto con la liquidez)
-  - SIGNAL_EXIT_N: 5 → 4 (reaccionar más rápido a reversión de señal)
-  - LATE_EXIT_SECS: 45 → 60 (salir un poco antes al final)
+CAMBIO CENTRAL v4:
+  El TP y SL ya no se calculan como múltiplo del bet ($), sino como
+  movimiento absoluto del precio del TOKEN desde la entrada.
+
+  Antes (v3):
+    TP = unrealized >= bet * 2.0   → necesitaba casi resolución binaria
+    SL = unrealized <= -(bet * 0.45)
+
+  Ahora (v4):
+    TP = token sube  TP_PRICE_MOVE  desde entry_price  (ej: +0.08 = 8 centavos)
+    SL = token baja  SL_PRICE_MOVE  desde entry_price  (ej: -0.04 = 4 centavos)
+
+  Ratio riesgo/recompensa: 2:1 a favor.
+  Ambos niveles son alcanzables en minutos sin esperar resolución binaria.
+
+  Otros cambios v4:
+    - SIGNAL_EXIT_N: 4 → 6  (no salir en cada fluctuación de OBI)
+    - LATE_EXIT_SECS: 60 → 75 (más margen para dejar correr ganadores)
+    - Trailing stop: si el trade va +6 centavos, el SL sube a breakeven
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
 
 INITIAL_CAPITAL  = 100.0
-TRADE_PCT        = 0.02      # 2% of capital per trade
-MIN_CONFIDENCE   = 60        # Bajado de 65 → 60
-ENTRY_AFTER_N    = 3         # Bajado de 6 → 3 snaps consecutivos (9s con poll 3s)
+TRADE_PCT        = 0.02      # 2% del capital por trade
+MIN_CONFIDENCE   = 60
+ENTRY_AFTER_N    = 3         # snaps consecutivos para confirmar entrada
 
 # Entry filters
-MIN_ENTRY_PRICE  = 0.20      # skip tokens below 20¢
-MAX_ENTRY_SPREAD = 0.10      # Bajado de 12% → 10%: spread máximo tolerable
+MIN_ENTRY_PRICE  = 0.20
+MAX_ENTRY_SPREAD = 0.10
 
-# Exit parameters
-TAKE_PROFIT_MULT = 2.0       # Bajado de 3.0 → 2.0: TP al 200% del bet
-STOP_LOSS_PCT    = 0.45      # Bajado de 0.65 → 0.45: SL al 45% del bet
-SIGNAL_EXIT_N    = 4         # Bajado de 5 → 4 snaps contrarios para salir
-LATE_EXIT_SECS   = 60        # Subido de 45 → 60: salir antes de la última campana
+# ── TP/SL por movimiento de precio del token (v4) ─────────────────────────────
+TP_PRICE_MOVE    = 0.08    # TP cuando el token sube 8¢ desde entrada
+SL_PRICE_MOVE    = 0.04    # SL cuando el token baja 4¢ desde entrada
+TRAIL_TRIGGER    = 0.06    # A partir de +6¢, activar trailing stop
+TRAIL_SL_MOVE    = 0.00    # Trailing SL sube a breakeven (0¢ de pérdida)
+
+# Signal exit
+SIGNAL_EXIT_N    = 6       # Subido de 4 → 6: aguantar fluctuaciones de OBI
+LATE_EXIT_SECS   = 75      # Subido de 60 → 75: más margen para ganadores
 
 
 @dataclass
 class Trade:
-    id:           int
-    market:       str
-    direction:    str           # "UP" or "DOWN"
-    entry_price:  float         # token price at entry (0–1)
-    shares:       float         # bet_size / entry_price
-    bet_size:     float         # USDC committed
-    entry_time:   str
-    exit_price:   Optional[float] = None
-    pnl:          Optional[float] = None
-    status:       str = "OPEN"  # OPEN | WIN | LOSS | CANCELLED
-    exit_reason:  Optional[str] = None  # TP | SL | SIGNAL | LATE | EXPIRE | FORCED
+    id:            int
+    market:        str
+    direction:     str            # "UP" or "DOWN"
+    entry_price:   float          # precio del token al entrar (0–1)
+    shares:        float          # bet_size / entry_price
+    bet_size:      float          # USDC comprometidos
+    entry_time:    str
+    exit_price:    Optional[float] = None
+    pnl:           Optional[float] = None
+    status:        str = "OPEN"   # OPEN | WIN | LOSS | CANCELLED
+    exit_reason:   Optional[str]  = None  # TP | SL | TRAIL | SIGNAL | LATE | EXPIRE | FORCED
+
+    # Niveles dinámicos (se actualizan con trailing stop)
+    _tp_price:     float = field(default=0.0, repr=False)
+    _sl_price:     float = field(default=0.0, repr=False)
+    _trailing_active: bool = field(default=False, repr=False)
+
+    def __post_init__(self):
+        """Calcula TP/SL iniciales basados en el precio de entrada."""
+        if self.direction == "UP":
+            self._tp_price = round(self.entry_price + TP_PRICE_MOVE, 4)
+            self._sl_price = round(self.entry_price - SL_PRICE_MOVE, 4)
+        else:  # DOWN
+            # Para DOWN: ganamos cuando el token baja
+            self._tp_price = round(self.entry_price - TP_PRICE_MOVE, 4)
+            self._sl_price = round(self.entry_price + SL_PRICE_MOVE, 4)
+
+    def update_trailing(self, current_price: float):
+        """
+        Activa y actualiza el trailing stop.
+        Cuando el trade va +TRAIL_TRIGGER en nuestro favor,
+        movemos el SL a breakeven (entry_price) para proteger capital.
+        """
+        if self._trailing_active:
+            return  # ya activado, no mover más por ahora
+
+        if self.direction == "UP":
+            profit_move = current_price - self.entry_price
+            if profit_move >= TRAIL_TRIGGER:
+                # Mover SL a breakeven
+                self._sl_price = round(self.entry_price + TRAIL_SL_MOVE, 4)
+                self._trailing_active = True
+        else:  # DOWN
+            profit_move = self.entry_price - current_price
+            if profit_move >= TRAIL_TRIGGER:
+                self._sl_price = round(self.entry_price - TRAIL_SL_MOVE, 4)
+                self._trailing_active = True
+
+    def check_tp_sl(self, current_price: float) -> Optional[str]:
+        """
+        Evalúa si el precio actual toca TP o SL.
+        Retorna "TP", "SL", "TRAIL" o None.
+        """
+        self.update_trailing(current_price)
+
+        if self.direction == "UP":
+            if current_price >= self._tp_price:
+                return "TP"
+            if current_price <= self._sl_price:
+                return "TRAIL" if self._trailing_active else "SL"
+        else:  # DOWN
+            if current_price <= self._tp_price:
+                return "TP"
+            if current_price >= self._sl_price:
+                return "TRAIL" if self._trailing_active else "SL"
+
+        return None
 
     def mark_to_market(self, current_price: float) -> float:
         return round(self.shares * current_price, 4)
@@ -79,17 +145,20 @@ class Trade:
 
     def to_dict(self) -> dict:
         return {
-            "id":           self.id,
-            "market":       self.market,
-            "direction":    self.direction,
-            "entry_price":  self.entry_price,
-            "shares":       round(self.shares, 4),
-            "bet_size":     self.bet_size,
-            "entry_time":   self.entry_time,
-            "exit_price":   self.exit_price,
-            "pnl":          self.pnl,
-            "status":       self.status,
-            "exit_reason":  self.exit_reason,
+            "id":               self.id,
+            "market":           self.market,
+            "direction":        self.direction,
+            "entry_price":      self.entry_price,
+            "shares":           round(self.shares, 4),
+            "bet_size":         self.bet_size,
+            "entry_time":       self.entry_time,
+            "exit_price":       self.exit_price,
+            "pnl":              self.pnl,
+            "status":           self.status,
+            "exit_reason":      self.exit_reason,
+            "tp_price":         round(self._tp_price, 4),
+            "sl_price":         round(self._sl_price, 4),
+            "trailing_active":  self._trailing_active,
         }
 
 
@@ -158,7 +227,6 @@ class Portfolio:
 
         if entry_price <= 0.01:
             return False
-
         if entry_price < MIN_ENTRY_PRICE:
             return False
 
@@ -185,25 +253,28 @@ class Portfolio:
             self._db.save_trade(self.active_trade)
         return True
 
-    # ── v3: Smart exit checks ─────────────────────────────────────────────────
+    # ── v4: Smart exit checks ─────────────────────────────────────────────────
 
     def check_exits(self, signal: dict, up_price: float, down_price: float,
                     secs_left) -> Optional[str]:
+        """
+        Prioridad: TP > SL/TRAIL > SIGNAL > LATE
+
+        TP y SL ahora se evalúan contra el precio actual del token,
+        no contra el P&L en dólares. Más realista y alcanzable.
+        """
         if not self.active_trade:
             return None
 
         trade = self.active_trade
-        upnl  = self.get_unrealized(up_price, down_price)
+        current_price = self.current_price_for_trade(up_price, down_price)
 
-        # 1. Take Profit
-        if upnl >= trade.bet_size * TAKE_PROFIT_MULT:
-            return "TP"
+        # 1. TP / SL / TRAIL (basado en precio del token)
+        price_exit = trade.check_tp_sl(current_price)
+        if price_exit:
+            return price_exit
 
-        # 2. Stop Loss
-        if upnl <= -(trade.bet_size * STOP_LOSS_PCT):
-            return "SL"
-
-        # 3. Signal reversal streak
+        # 2. Signal reversal streak
         label = signal.get("label", "NEUTRAL")
         if label in ("UP", "DOWN", "STRONG UP", "STRONG DOWN"):
             direction = "UP" if "UP" in label else "DOWN"
@@ -211,12 +282,13 @@ class Portfolio:
                 self._opposing_streak += 1
             else:
                 self._opposing_streak = 0
-        # NEUTRAL: no cambia streak
+        # NEUTRAL: no modifica el streak
 
         if self._opposing_streak >= SIGNAL_EXIT_N:
             return "SIGNAL"
 
-        # 4. Late exit: any profit in last LATE_EXIT_SECS
+        # 3. Late exit: cualquier ganancia en los últimos LATE_EXIT_SECS
+        upnl = trade.unrealized_pnl(current_price)
         if secs_left is not None and secs_left <= LATE_EXIT_SECS and upnl > 0:
             return "LATE"
 
@@ -333,25 +405,41 @@ class Portfolio:
         if self.active_trade:
             t  = self.active_trade
             cp = self.current_price_for_trade(up_price, down_price)
-            tp_price = round(t.entry_price * (1 + TAKE_PROFIT_MULT), 4)
-            sl_price = round(t.entry_price * (1 - STOP_LOSS_PCT), 4)
-            tp_pnl   = round(t.bet_size * TAKE_PROFIT_MULT, 4)
-            sl_pnl   = round(-(t.bet_size * STOP_LOSS_PCT), 4)
-            rng = tp_price - sl_price
-            progress = round(
-                max(0.0, min(1.0, (cp - sl_price) / rng)) * 100, 1
-            ) if rng > 0 else 50.0
+
+            # Distancia al TP y SL en precio del token
+            if t.direction == "UP":
+                dist_to_tp = round(t._tp_price - cp, 4)
+                dist_to_sl = round(cp - t._sl_price, 4)
+            else:
+                dist_to_tp = round(cp - t._tp_price, 4)
+                dist_to_sl = round(t._sl_price - cp, 4)
+
+            # Progreso: 0% = en SL, 100% = en TP
+            total_range = TP_PRICE_MOVE + SL_PRICE_MOVE
+            if t.direction == "UP":
+                progress = round(
+                    max(0.0, min(1.0, (cp - t._sl_price) / total_range)) * 100, 1
+                )
+            else:
+                progress = round(
+                    max(0.0, min(1.0, (t._sl_price - cp) / total_range)) * 100, 1
+                )
+
             active = {
                 **t.to_dict(),
-                "current_price":   round(cp, 4),
-                "mark_to_market":  t.mark_to_market(cp),
-                "unrealized_pnl":  t.unrealized_pnl(cp),
-                "tp_price":        tp_price,
-                "sl_price":        sl_price,
-                "tp_pnl":          tp_pnl,
-                "sl_pnl":          sl_pnl,
-                "progress_pct":    progress,
-                "opposing_streak": self._opposing_streak,
+                "current_price":    round(cp, 4),
+                "mark_to_market":   t.mark_to_market(cp),
+                "unrealized_pnl":   t.unrealized_pnl(cp),
+                "tp_price":         round(t._tp_price, 4),
+                "sl_price":         round(t._sl_price, 4),
+                "dist_to_tp":       dist_to_tp,
+                "dist_to_sl":       dist_to_sl,
+                "trailing_active":  t._trailing_active,
+                "progress_pct":     progress,
+                "opposing_streak":  self._opposing_streak,
+                # PnL potencial en $ si llega a TP o SL
+                "tp_pnl":           round(t.shares * t._tp_price - t.bet_size, 4),
+                "sl_pnl":           round(t.shares * t._sl_price - t.bet_size, 4),
             }
 
         exit_reasons: dict = {}
