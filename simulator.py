@@ -15,7 +15,7 @@ from typing import Optional
 INITIAL_CAPITAL  = 100.0
 TRADE_PCT        = 0.02      # 2% of capital per trade
 MIN_CONFIDENCE   = 65
-ENTRY_AFTER_N    = 4         # consecutive aligned snaps required to enter
+ENTRY_AFTER_N    = 6         # consecutive aligned snaps required to enter
 
 # Entry filters (realistic price guards)
 MIN_ENTRY_PRICE  = 0.20      # skip tokens below 10¢ (huge spread, lottery-ticket probability)
