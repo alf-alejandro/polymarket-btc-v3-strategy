@@ -1,25 +1,35 @@
 """
-simulator.py — Portfolio simulation v4: TP/SL por movimiento de precio del token
+simulator.py — Portfolio simulation v5: TP/SL ajustados por fee real de Polymarket
 
-CAMBIO CENTRAL v4:
-  El TP y SL ya no se calculan como múltiplo del bet ($), sino como
-  movimiento absoluto del precio del TOKEN desde la entrada.
+CONTEXTO:
+  Polymarket cobra taker fee en mercados crypto de 5min (desde enero 2026).
+  Fee = p × (1-p) × FEE_RATE, donde p = precio del token (0-1).
+  Fee máxima: 1.56% cuando p = 0.50. Decrece hacia los extremos.
 
-  Antes (v3):
-    TP = unrealized >= bet * 2.0   → necesitaba casi resolución binaria
-    SL = unrealized <= -(bet * 0.45)
+  Con bet de $2 a p=0.50:
+    Fee entrada ≈ $0.031
+    Fee salida  ≈ $0.031
+    Total fees  ≈ $0.063 por trade round-trip
 
-  Ahora (v4):
-    TP = token sube  TP_PRICE_MOVE  desde entry_price  (ej: +0.08 = 8 centavos)
-    SL = token baja  SL_PRICE_MOVE  desde entry_price  (ej: -0.04 = 4 centavos)
+  Esto significa que el ratio TP:SL bruto de 2:1 se reduce a ~1.35:1 neto.
 
-  Ratio riesgo/recompensa: 2:1 a favor.
-  Ambos niveles son alcanzables en minutos sin esperar resolución binaria.
+AJUSTES v5 vs v4:
+  - TRADE_PCT: 2% → 3%  (bet mayor = fees proporcionalmente menores)
+  - TP_PRICE_MOVE: 0.08 → 0.10  (10 centavos: ratio neto sube a ~1.8:1)
+  - SL_PRICE_MOVE: 0.04 → 0.04  (se mantiene igual)
+  - TRAIL_TRIGGER: 0.06 → 0.07  (trailing activa a +7¢, antes del TP de 10¢)
+  - Fee estimada embebida en el cálculo de P&L para mostrar neto real
 
-  Otros cambios v4:
-    - SIGNAL_EXIT_N: 4 → 6  (no salir en cada fluctuación de OBI)
-    - LATE_EXIT_SECS: 60 → 75 (más margen para dejar correr ganadores)
-    - Trailing stop: si el trade va +6 centavos, el SL sube a breakeven
+RATIO NETO REAL (a p=0.50, bet=$3):
+  TP bruto:  6 shares × 0.10 = $0.60
+  Fee total: ~$0.094
+  TP neto:   $0.506
+
+  SL bruto:  6 shares × 0.04 = $0.24
+  Fee salida: ~$0.047
+  SL neto:   $0.287
+
+  Ratio neto: 0.506 / 0.287 ≈ 1.76:1 ✓
 """
 
 from dataclasses import dataclass, field
@@ -28,119 +38,136 @@ from typing import Optional
 
 
 INITIAL_CAPITAL  = 100.0
-TRADE_PCT        = 0.02      # 2% del capital por trade
+TRADE_PCT        = 0.03      # Subido 2% → 3%: fees menos pesadas proporcionalmente
 MIN_CONFIDENCE   = 60
-ENTRY_AFTER_N    = 3         # snaps consecutivos para confirmar entrada
+ENTRY_AFTER_N    = 3
 
 # Entry filters
 MIN_ENTRY_PRICE  = 0.20
 MAX_ENTRY_SPREAD = 0.10
 
-# ── TP/SL por movimiento de precio del token (v4) ─────────────────────────────
-TP_PRICE_MOVE    = 0.08    # TP cuando el token sube 8¢ desde entrada
-SL_PRICE_MOVE    = 0.04    # SL cuando el token baja 4¢ desde entrada
-TRAIL_TRIGGER    = 0.06    # A partir de +6¢, activar trailing stop
-TRAIL_SL_MOVE    = 0.00    # Trailing SL sube a breakeven (0¢ de pérdida)
+# ── TP/SL por movimiento de precio del token ───────────────────────────────────
+TP_PRICE_MOVE    = 0.10    # Subido 8¢ → 10¢: más margen para cubrir fees
+SL_PRICE_MOVE    = 0.04    # Se mantiene 4¢
+TRAIL_TRIGGER    = 0.07    # Trailing activa a +7¢ (antes del TP de 10¢)
+TRAIL_SL_MOVE    = 0.00    # Trailing SL sube a breakeven
 
-# Signal exit
-SIGNAL_EXIT_N    = 6       # Subido de 4 → 6: aguantar fluctuaciones de OBI
-LATE_EXIT_SECS   = 75      # Subido de 60 → 75: más margen para ganadores
+# Signal / time exits
+SIGNAL_EXIT_N    = 6
+LATE_EXIT_SECS   = 75
+
+# ── Fee model (Polymarket taker fee, 5min crypto markets) ─────────────────────
+FEE_RATE         = 0.0625   # fee = p × (1-p) × FEE_RATE
+
+
+def estimate_fee(price: float, usdc_amount: float) -> float:
+    """
+    Estima la taker fee de Polymarket para una operación.
+    price: precio del token (0–1)
+    usdc_amount: USDC invertidos (bet_size)
+    Retorna fee en USDC.
+    """
+    rate = price * (1 - price) * FEE_RATE
+    return round(rate * usdc_amount, 6)
 
 
 @dataclass
 class Trade:
     id:            int
     market:        str
-    direction:     str            # "UP" or "DOWN"
-    entry_price:   float          # precio del token al entrar (0–1)
-    shares:        float          # bet_size / entry_price
-    bet_size:      float          # USDC comprometidos
+    direction:     str
+    entry_price:   float
+    shares:        float
+    bet_size:      float
     entry_time:    str
+    entry_fee:     float = 0.0   # fee pagada al entrar
     exit_price:    Optional[float] = None
-    pnl:           Optional[float] = None
-    status:        str = "OPEN"   # OPEN | WIN | LOSS | CANCELLED
-    exit_reason:   Optional[str]  = None  # TP | SL | TRAIL | SIGNAL | LATE | EXPIRE | FORCED
+    exit_fee:      float = 0.0   # fee pagada al salir
+    pnl:           Optional[float] = None   # P&L neto (después de fees)
+    pnl_gross:     Optional[float] = None   # P&L bruto (antes de fees)
+    status:        str = "OPEN"
+    exit_reason:   Optional[str] = None
 
-    # Niveles dinámicos (se actualizan con trailing stop)
-    _tp_price:     float = field(default=0.0, repr=False)
-    _sl_price:     float = field(default=0.0, repr=False)
-    _trailing_active: bool = field(default=False, repr=False)
+    _tp_price:        float = field(default=0.0, repr=False)
+    _sl_price:        float = field(default=0.0, repr=False)
+    _trailing_active: bool  = field(default=False, repr=False)
 
     def __post_init__(self):
-        """Calcula TP/SL iniciales basados en el precio de entrada."""
+        # Calcular fee de entrada
+        self.entry_fee = estimate_fee(self.entry_price, self.bet_size)
+
+        # TP y SL en precio del token
         if self.direction == "UP":
             self._tp_price = round(self.entry_price + TP_PRICE_MOVE, 4)
             self._sl_price = round(self.entry_price - SL_PRICE_MOVE, 4)
-        else:  # DOWN
-            # Para DOWN: ganamos cuando el token baja
+        else:
             self._tp_price = round(self.entry_price - TP_PRICE_MOVE, 4)
             self._sl_price = round(self.entry_price + SL_PRICE_MOVE, 4)
 
     def update_trailing(self, current_price: float):
-        """
-        Activa y actualiza el trailing stop.
-        Cuando el trade va +TRAIL_TRIGGER en nuestro favor,
-        movemos el SL a breakeven (entry_price) para proteger capital.
-        """
         if self._trailing_active:
-            return  # ya activado, no mover más por ahora
-
+            return
         if self.direction == "UP":
-            profit_move = current_price - self.entry_price
-            if profit_move >= TRAIL_TRIGGER:
-                # Mover SL a breakeven
+            if current_price - self.entry_price >= TRAIL_TRIGGER:
                 self._sl_price = round(self.entry_price + TRAIL_SL_MOVE, 4)
                 self._trailing_active = True
-        else:  # DOWN
-            profit_move = self.entry_price - current_price
-            if profit_move >= TRAIL_TRIGGER:
+        else:
+            if self.entry_price - current_price >= TRAIL_TRIGGER:
                 self._sl_price = round(self.entry_price - TRAIL_SL_MOVE, 4)
                 self._trailing_active = True
 
     def check_tp_sl(self, current_price: float) -> Optional[str]:
-        """
-        Evalúa si el precio actual toca TP o SL.
-        Retorna "TP", "SL", "TRAIL" o None.
-        """
         self.update_trailing(current_price)
-
         if self.direction == "UP":
             if current_price >= self._tp_price:
                 return "TP"
             if current_price <= self._sl_price:
                 return "TRAIL" if self._trailing_active else "SL"
-        else:  # DOWN
+        else:
             if current_price <= self._tp_price:
                 return "TP"
             if current_price >= self._sl_price:
                 return "TRAIL" if self._trailing_active else "SL"
-
         return None
 
     def mark_to_market(self, current_price: float) -> float:
         return round(self.shares * current_price, 4)
 
     def unrealized_pnl(self, current_price: float) -> float:
+        """P&L neto estimado (descuenta fee de entrada ya pagada + fee de salida estimada)."""
+        gross     = self.mark_to_market(current_price) - self.bet_size
+        exit_fee  = estimate_fee(current_price, self.mark_to_market(current_price))
+        return round(gross - self.entry_fee - exit_fee, 4)
+
+    def unrealized_pnl_gross(self, current_price: float) -> float:
+        """P&L bruto (sin fees, para referencia)."""
         return round(self.mark_to_market(current_price) - self.bet_size, 4)
 
     def close_binary(self, won: bool, exit_price: float, exit_reason: str = "EXPIRE") -> float:
         self.exit_price  = exit_price
         self.exit_reason = exit_reason
         if won:
-            proceeds    = self.shares * 1.0
-            self.pnl    = round(proceeds - self.bet_size, 4)
-            self.status = "WIN"
+            proceeds       = self.shares * 1.0
+            self.pnl_gross = round(proceeds - self.bet_size, 4)
+            # Fee al vender a precio ~1.0 es casi 0 (p*(1-p) → 0)
+            self.exit_fee  = estimate_fee(exit_price, proceeds)
+            self.pnl       = round(self.pnl_gross - self.entry_fee - self.exit_fee, 4)
+            self.status    = "WIN"
         else:
-            self.pnl    = round(-self.bet_size, 4)
-            self.status = "LOSS"
+            self.pnl_gross = round(-self.bet_size, 4)
+            self.exit_fee  = 0.0
+            self.pnl       = round(-self.bet_size - self.entry_fee, 4)
+            self.status    = "LOSS"
         return self.pnl
 
     def close_market(self, exit_price: float, exit_reason: str) -> float:
         self.exit_price  = round(exit_price, 4)
         self.exit_reason = exit_reason
-        proceeds = self.shares * exit_price
-        self.pnl = round(proceeds - self.bet_size, 4)
-        self.status = "WIN" if self.pnl > 0 else "LOSS"
+        proceeds         = self.shares * exit_price
+        self.exit_fee    = estimate_fee(exit_price, proceeds)
+        self.pnl_gross   = round(proceeds - self.bet_size, 4)
+        self.pnl         = round(proceeds - self.bet_size - self.entry_fee - self.exit_fee, 4)
+        self.status      = "WIN" if self.pnl > 0 else "LOSS"
         return self.pnl
 
     def to_dict(self) -> dict:
@@ -152,7 +179,10 @@ class Trade:
             "shares":           round(self.shares, 4),
             "bet_size":         self.bet_size,
             "entry_time":       self.entry_time,
+            "entry_fee":        round(self.entry_fee, 4),
             "exit_price":       self.exit_price,
+            "exit_fee":         round(self.exit_fee, 4),
+            "pnl_gross":        self.pnl_gross,
             "pnl":              self.pnl,
             "status":           self.status,
             "exit_reason":      self.exit_reason,
@@ -253,23 +283,17 @@ class Portfolio:
             self._db.save_trade(self.active_trade)
         return True
 
-    # ── v4: Smart exit checks ─────────────────────────────────────────────────
+    # ── Exit checks ───────────────────────────────────────────────────────────
 
     def check_exits(self, signal: dict, up_price: float, down_price: float,
                     secs_left) -> Optional[str]:
-        """
-        Prioridad: TP > SL/TRAIL > SIGNAL > LATE
-
-        TP y SL ahora se evalúan contra el precio actual del token,
-        no contra el P&L en dólares. Más realista y alcanzable.
-        """
         if not self.active_trade:
             return None
 
-        trade = self.active_trade
+        trade         = self.active_trade
         current_price = self.current_price_for_trade(up_price, down_price)
 
-        # 1. TP / SL / TRAIL (basado en precio del token)
+        # 1. TP / SL / TRAIL por precio del token
         price_exit = trade.check_tp_sl(current_price)
         if price_exit:
             return price_exit
@@ -282,12 +306,11 @@ class Portfolio:
                 self._opposing_streak += 1
             else:
                 self._opposing_streak = 0
-        # NEUTRAL: no modifica el streak
 
         if self._opposing_streak >= SIGNAL_EXIT_N:
             return "SIGNAL"
 
-        # 3. Late exit: cualquier ganancia en los últimos LATE_EXIT_SECS
+        # 3. Late exit con ganancia neta positiva
         upnl = trade.unrealized_pnl(current_price)
         if secs_left is not None and secs_left <= LATE_EXIT_SECS and upnl > 0:
             return "LATE"
@@ -335,7 +358,7 @@ class Portfolio:
         cp = self.current_price_for_trade(up_price, down_price)
         return self.active_trade.unrealized_pnl(cp)
 
-    # ── Binary close (market expiry fallback) ─────────────────────────────────
+    # ── Binary close ──────────────────────────────────────────────────────────
 
     def close_trade(self, up_price: float, down_price: float,
                     force_winner: Optional[bool] = None) -> Optional[Trade]:
@@ -343,7 +366,6 @@ class Portfolio:
             return None
 
         trade = self.active_trade
-
         if force_winner is not None:
             won = force_winner
         else:
@@ -393,6 +415,7 @@ class Portfolio:
         win_rate = round(len(wins) / n_closed * 100, 1) if n_closed else 0.0
 
         realized_pnl   = sum(t.pnl for t in closed if t.pnl is not None)
+        total_fees     = sum((t.entry_fee + t.exit_fee) for t in closed)
         unrealized_pnl = self.get_unrealized(up_price, down_price)
         total_pnl      = round(realized_pnl + unrealized_pnl, 4)
         equity         = round(
@@ -406,30 +429,27 @@ class Portfolio:
             t  = self.active_trade
             cp = self.current_price_for_trade(up_price, down_price)
 
-            # Distancia al TP y SL en precio del token
             if t.direction == "UP":
                 dist_to_tp = round(t._tp_price - cp, 4)
                 dist_to_sl = round(cp - t._sl_price, 4)
+                progress   = round(max(0.0, min(1.0,
+                    (cp - t._sl_price) / (TP_PRICE_MOVE + SL_PRICE_MOVE)
+                )) * 100, 1)
             else:
                 dist_to_tp = round(cp - t._tp_price, 4)
                 dist_to_sl = round(t._sl_price - cp, 4)
+                progress   = round(max(0.0, min(1.0,
+                    (t._sl_price - cp) / (TP_PRICE_MOVE + SL_PRICE_MOVE)
+                )) * 100, 1)
 
-            # Progreso: 0% = en SL, 100% = en TP
-            total_range = TP_PRICE_MOVE + SL_PRICE_MOVE
-            if t.direction == "UP":
-                progress = round(
-                    max(0.0, min(1.0, (cp - t._sl_price) / total_range)) * 100, 1
-                )
-            else:
-                progress = round(
-                    max(0.0, min(1.0, (t._sl_price - cp) / total_range)) * 100, 1
-                )
-
+            exit_fee_est = estimate_fee(cp, t.mark_to_market(cp))
             active = {
                 **t.to_dict(),
                 "current_price":    round(cp, 4),
                 "mark_to_market":   t.mark_to_market(cp),
-                "unrealized_pnl":   t.unrealized_pnl(cp),
+                "unrealized_pnl":   t.unrealized_pnl(cp),      # neto (con fees)
+                "unrealized_gross": t.unrealized_pnl_gross(cp), # bruto
+                "exit_fee_est":     round(exit_fee_est, 4),
                 "tp_price":         round(t._tp_price, 4),
                 "sl_price":         round(t._sl_price, 4),
                 "dist_to_tp":       dist_to_tp,
@@ -437,9 +457,10 @@ class Portfolio:
                 "trailing_active":  t._trailing_active,
                 "progress_pct":     progress,
                 "opposing_streak":  self._opposing_streak,
-                # PnL potencial en $ si llega a TP o SL
-                "tp_pnl":           round(t.shares * t._tp_price - t.bet_size, 4),
-                "sl_pnl":           round(t.shares * t._sl_price - t.bet_size, 4),
+                "tp_pnl":  round(t.shares * t._tp_price - t.bet_size - t.entry_fee
+                                 - estimate_fee(t._tp_price, t.shares * t._tp_price), 4),
+                "sl_pnl":  round(t.shares * t._sl_price - t.bet_size - t.entry_fee
+                                 - estimate_fee(t._sl_price, t.shares * t._sl_price), 4),
             }
 
         exit_reasons: dict = {}
@@ -455,6 +476,7 @@ class Portfolio:
             "unrealized_pnl":  round(unrealized_pnl, 4),
             "total_pnl":       total_pnl,
             "total_pnl_pct":   round(total_pnl / self.initial_capital * 100, 2),
+            "total_fees_paid": round(total_fees, 4),      # cuánto se fue en fees
             "total_trades":    len(closed),
             "wins":            len(wins),
             "losses":          len(losses),
