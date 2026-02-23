@@ -1,14 +1,12 @@
-"""
-simulator.py — Portfolio simulation v7: Mean Reversion, código limpio
+"""simulator.py — Portfolio simulation v8: Mean Reversion
 
-Estrategia: comprar token barato (0.15–0.35) en primeros 2 minutos,
-esperar que suba a 0.47 (TP parcial 50%), dejar el resto a resolución binaria.
+Estrategia: comprar token barato (0.15-0.35) en primeros 2 minutos,
+TP parcial 50% al llegar a 0.47, resto a resolución binaria (0 o 1).
 
-Fixes v7:
-  - Eliminado método exit_at_market_price duplicado (bug crítico)
-  - TP para DOWN correctamente verifica que el precio del token DOWN suba
-  - SL para DOWN correctamente verifica que el precio del token DOWN baje
-  - Capital accounting limpio y sin dobles conteos
+Fixes v8:
+  - Eliminado cierre anticipado LATE (cerraba antes del binario = perdía ganancia)
+  - unrealized_pnl() ya incluye partial_pnl; stats() NO lo suma por separado
+  - Capital accounting verificado y correcto
 """
 
 from dataclasses import dataclass, field
@@ -316,11 +314,7 @@ class Portfolio:
         if trade.should_sl(current_price):
             return "SL"
 
-        # 3. Últimos 20s con ganancia → asegurar
-        if secs_left is not None and secs_left <= 20:
-            if trade.unrealized_pnl(current_price) > 0:
-                return "LATE"
-
+        # El 50% restante espera resolución binaria — sin cierre anticipado por tiempo
         return None
 
     # ── Ejecutar salidas ──────────────────────────────────────────────────────
@@ -449,12 +443,8 @@ class Portfolio:
         realized_pnl   = sum(t.pnl for t in closed if t.pnl is not None)
         total_fees     = sum((t.entry_fee + t.exit_fee) for t in closed)
         unrealized_pnl = self.get_unrealized(up_price, down_price)
-        # Incluir P&L parcial ya realizado del trade activo
-        active_partial_pnl = (
-            self.active_trade.partial_pnl or 0.0
-            if self.active_trade and self.active_trade.partial_exit_done else 0.0
-        )
-        total_pnl = round(realized_pnl + active_partial_pnl + unrealized_pnl, 4)
+        # unrealized_pnl() already includes partial_pnl internally — do NOT add separately
+        total_pnl      = round(realized_pnl + unrealized_pnl, 4)
         equity         = round(self.capital + unrealized_pnl
                                + (self.active_trade.bet_size * (1 - PARTIAL_EXIT_PCT)
                                   if self.active_trade and self.active_trade.partial_exit_done
