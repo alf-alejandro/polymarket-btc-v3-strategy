@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SOL Strategy v9 — Momentum Dashboard</title>
+  <title>Underdog Hunter — Polymarket</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
@@ -12,756 +12,193 @@
       --red:    #ff4466;
       --yellow: #fbbf24;
       --cyan:   #22d3ee;
-      --purple: #a78bfa;
-      --bg:     #0a0e1a;
-      --card:   #0f1629;
-      --border: #1e2d4a;
+      --bg:     #05070a;
+      --card:   #0d1117;
+      --border: #1f2937;
     }
-    * { box-sizing: border-box; }
-    body { background: var(--bg); color: #e2e8f0; font-family: 'Courier New', monospace; margin: 0; }
-    .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; }
+    body { background: var(--bg); color: #e2e8f0; font-family: 'monospace'; margin: 0; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; }
+    
+    /* Animación para el último minuto */
+    @keyframes panic { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; transform: scale(1.05); } }
+    .last-minute { color: var(--red) !important; animation: panic 0.8s infinite; }
+    
+    .status-dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+    .status-run { background: var(--green); box-shadow: 0 0 10px var(--green); }
+    .status-wait { background: var(--yellow); }
 
-    @keyframes pulse-green { 0%,100%{box-shadow:0 0 0 0 rgba(0,255,136,.6)} 50%{box-shadow:0 0 0 12px rgba(0,255,136,0)} }
-    @keyframes pulse-red   { 0%,100%{box-shadow:0 0 0 0 rgba(255,68,102,.6)} 50%{box-shadow:0 0 0 12px rgba(255,68,102,0)} }
-    @keyframes pulse-yellow{ 0%,100%{box-shadow:0 0 0 0 rgba(251,191,36,.4)} 50%{box-shadow:0 0 0 8px rgba(251,191,36,0)} }
-    .signal-up     { animation: pulse-green  1.5s infinite; border-color: var(--green) !important; }
-    .signal-down   { animation: pulse-red    1.5s infinite; border-color: var(--red)   !important; }
-    .signal-neutral{ animation: pulse-yellow 2s   infinite; border-color: var(--yellow)!important; }
-
-    .obi-track { background: #1e2d4a; border-radius: 4px; height: 20px; position: relative; overflow: hidden; }
-    .obi-fill  { height: 100%; transition: width .5s ease, background .3s ease; border-radius: 4px; }
-
-    .ring-container { position: relative; width: 90px; height: 90px; }
-    .ring-svg { transform: rotate(-90deg); }
-    .ring-bg  { fill: none; stroke: #1e2d4a; stroke-width: 6; }
-    .ring-fg  { fill: none; stroke-width: 6; stroke-linecap: round; transition: stroke-dashoffset .5s ease, stroke .3s; }
-    .ring-text{ position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-                flex-direction: column; font-size: 13px; font-weight: bold; }
-
-    .depth-bar { height: 6px; border-radius: 2px; transition: width .4s ease; }
-
-    /* TP/SL progress bar */
-    .progress-track { background: #1e2d4a; border-radius: 4px; height: 12px; position: relative; overflow: hidden; }
-    .progress-fill  { height: 100%; border-radius: 4px; transition: width .5s ease, background .3s ease; position: absolute; left: 0; top: 0; }
-    .progress-marker { position: absolute; top: 0; bottom: 0; width: 2px; background: rgba(255,255,255,0.6); z-index: 2; }
-    .progress-current { position: absolute; top: 0; bottom: 0; width: 3px; background: white; z-index: 3; border-radius: 1px; }
-
-    .trade-table th { font-size: 10px; letter-spacing: .05em; color: #64748b; border-bottom: 1px solid var(--border); padding: 4px 8px; text-align: left; }
-    .trade-table td { font-size: 11px; padding: 5px 8px; border-bottom: 1px solid #0f1e35; }
-    .trade-table tr:last-child td { border-bottom: none; }
-
-    .stat-label { font-size: 10px; color: #64748b; letter-spacing: .06em; text-transform: uppercase; }
-    .stat-value { font-size: 18px; font-weight: bold; }
-
-    .dot-up      { color: var(--green); }
-    .dot-down    { color: var(--red);   }
-    .dot-neutral { color: var(--yellow);}
-
-    .glow-green { text-shadow: 0 0 10px rgba(0,255,136,.7); }
-    .glow-red   { text-shadow: 0 0 10px rgba(255,68,102,.7); }
-    .glow-yellow{ text-shadow: 0 0 10px rgba(251,191,36,.6); }
-
-    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
-    .status-dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
-    .status-run  { background: var(--green); animation: blink 2s infinite; }
-    .status-err  { background: var(--red); }
-    .status-init { background: var(--yellow); animation: blink 1s infinite; }
-
-    ::-webkit-scrollbar { width: 4px; }
-    ::-webkit-scrollbar-track { background: var(--bg); }
-    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-    .badge { font-size: 9px; font-weight: bold; padding: 1px 5px; border-radius: 3px; letter-spacing: .05em; }
-    .badge-tp     { background: #1a3a2a; color: var(--green); }
-    .badge-sl     { background: #3a1a1a; color: var(--red); }
-    .badge-partial{ background: #1a3020; color: #6ee7b7; }
-    .badge-signal { background: #1a2a3a; color: var(--cyan); }
-    .badge-late   { background: #2a2a1a; color: var(--yellow); }
-    .badge-expire { background: #1e2d4a; color: #64748b; }
-    .badge-forced { background: #2a1a2a; color: var(--purple); }
+    .price-box { transition: all 0.3s ease; border: 2px solid transparent; }
+    .price-target { border-color: var(--cyan); background: rgba(34, 211, 238, 0.1); }
   </style>
 </head>
-<body class="min-h-screen p-3">
+<body class="p-4">
 
-  <!-- HEADER -->
-  <header class="card flex items-center justify-between px-4 py-3 mb-3">
-    <div class="flex items-center gap-3">
-      <div>
-        <div class="text-xs text-slate-500">POLYMARKET · SOL v9 Momentum · entrada 0.65–0.88 · TP@0.90 · SL@0.50</div>
-        <div class="text-sm font-bold text-cyan-400" id="market-question">Conectando...</div>
-      </div>
+  <header class="card flex items-center justify-between px-6 py-4 mb-4">
+    <div>
+      <h1 class="text-xl font-black tracking-tighter text-cyan-400">UNDERDOG HUNTER <span class="text-xs font-normal text-slate-500 ml-2">v1.0 Fixed $1</span></h1>
+      <p class="text-xs text-slate-500" id="market-question">Esperando mercado activo...</p>
     </div>
-    <div class="flex items-center gap-6">
-      <div class="text-center">
-        <div class="stat-label">UP ask (compra real)</div>
-        <div class="text-sm font-bold" id="header-up-ask" style="color:var(--green)">—</div>
-        <div class="text-xs text-slate-500">mid: <span id="header-up-price">—</span></div>
-      </div>
-      <div class="text-center">
-        <div class="stat-label">DOWN ask (compra real)</div>
-        <div class="text-sm font-bold" id="header-down-ask" style="color:var(--red)">—</div>
-        <div class="text-xs text-slate-500">mid: <span id="header-down-price">—</span></div>
-      </div>
-      <div class="text-center">
-        <div class="stat-label">Spread UP</div>
-        <div class="text-sm font-bold text-yellow-400" id="header-spread">—</div>
-        <div class="text-xs text-slate-500">bid: <span id="header-up-bid" style="color:var(--cyan)">—</span></div>
+    <div class="flex gap-8">
+      <div class="text-right">
+        <p class="text-[10px] text-slate-500 uppercase">Capital Actual</p>
+        <p class="text-2xl font-bold text-white" id="equity">$0.00</p>
       </div>
       <div class="flex items-center gap-2">
-        <span class="status-dot status-init" id="status-dot"></span>
-        <span class="text-xs text-slate-400" id="status-label">Inicializando</span>
+        <span class="status-dot status-wait" id="status-dot"></span>
+        <span class="text-xs font-bold uppercase tracking-widest" id="status-label">Offline</span>
       </div>
-      <div class="text-xs text-slate-500 tabular-nums" id="last-update">—</div>
     </div>
   </header>
 
-  <!-- ROW 1 -->
-  <div class="grid grid-cols-12 gap-3 mb-3">
-
-    <!-- Signal Widget -->
-    <div class="col-span-3 card p-4 flex flex-col items-center justify-center border-2 signal-neutral" id="signal-card" style="min-height:200px">
-      <div class="text-xs text-slate-500 mb-1">SEÑAL OBI</div>
-      <div class="text-3xl font-black mb-2 glow-yellow" id="signal-label" style="color:var(--yellow)">NEUTRAL</div>
-      <div class="text-xs text-slate-400 mb-3" id="signal-desc">Esperando datos...</div>
-      <div class="w-full">
-        <div class="flex justify-between text-xs text-slate-500 mb-1">
-          <span>Confianza</span>
-          <span id="conf-pct">50%</span>
-        </div>
-        <div class="obi-track w-full">
-          <div class="obi-fill" id="conf-bar" style="width:50%;background:#fbbf24"></div>
-        </div>
+  <div class="grid grid-cols-12 gap-4">
+    
+    <div class="col-span-12 lg:col-span-4 space-y-4">
+      
+      <div class="card p-6 flex flex-col items-center justify-center text-center">
+        <p class="text-xs text-slate-500 mb-2 uppercase tracking-widest">Tiempo para el cierre</p>
+        <div class="text-6xl font-black tabular-nums" id="timer">00:00</div>
+        <p class="text-xs mt-2 text-slate-400" id="timer-msg">Esperando ventana de entrada...</p>
       </div>
-      <div class="mt-3 w-full grid grid-cols-2 gap-2 text-center">
-        <div>
-          <div class="stat-label">OBI Actual</div>
-          <div class="text-sm font-bold" id="obi-now">—</div>
+
+      <div class="card p-4">
+        <p class="text-xs text-slate-500 mb-4 uppercase tracking-widest text-center">Monitor de Probabilidades</p>
+        <div class="grid grid-cols-2 gap-4">
+          <div id="box-up" class="price-box p-4 rounded-lg text-center bg-slate-900/50">
+            <p class="text-xs text-slate-400 mb-1">Token UP</p>
+            <p class="text-3xl font-bold" id="price-up">0.00</p>
+          </div>
+          <div id="box-down" class="price-box p-4 rounded-lg text-center bg-slate-900/50">
+            <p class="text-xs text-slate-400 mb-1">Token DOWN</p>
+            <p class="text-3xl font-bold" id="price-down">0.00</p>
+          </div>
         </div>
-        <div>
-          <div class="stat-label">OBI Avg</div>
-          <div class="text-sm font-bold" id="obi-avg">—</div>
-        </div>
+        <p class="text-[10px] text-center mt-4 text-slate-600">Objetivo: Comprar si el precio está entre 0.05 y 0.15</p>
       </div>
     </div>
 
-    <!-- OBI Gauge + History -->
-    <div class="col-span-3 card p-4">
-      <div class="text-xs text-slate-500 mb-3">ORDER BOOK IMBALANCE</div>
-      <div class="mb-2 text-xs text-slate-500 flex justify-between">
-        <span style="color:var(--red)">◄ SELL</span>
-        <span style="color:var(--green)">BUY ►</span>
-      </div>
-      <div class="obi-track mb-1 relative">
-        <div style="position:absolute;left:50%;top:0;bottom:0;width:2px;background:#374151;z-index:1"></div>
-        <div class="obi-fill" id="obi-bar" style="width:50%;margin-left:50%;background:var(--yellow)"></div>
-      </div>
-      <div class="text-center text-lg font-bold tabular-nums mb-4" id="obi-combined">0.00%</div>
-
-      <div class="space-y-2 mb-3">
-        <div>
-          <div class="flex justify-between text-xs mb-1">
-            <span style="color:var(--green)">Bid Vol</span>
-            <span id="bid-vol" class="font-mono">—</span>
+    <div class="col-span-12 lg:col-span-8 space-y-4">
+      
+      <div id="active-trade-card" class="card p-6 border-l-4 border-l-slate-700">
+        <div id="no-trade-msg" class="text-center py-8 text-slate-500 uppercase text-sm tracking-widest">
+          Buscando oportunidad de último minuto...
+        </div>
+        
+        <div id="trade-data" class="hidden">
+          <div class="flex justify-between items-start mb-6">
+            <div>
+              <span class="bg-cyan-500 text-black text-[10px] font-bold px-2 py-1 rounded">POSICIÓN ABIERTA</span>
+              <h2 class="text-2xl font-bold mt-2" id="at-direction">UP</h2>
+            </div>
+            <div class="text-right">
+              <p class="text-xs text-slate-500">Precio Entrada</p>
+              <p class="text-xl font-mono" id="at-entry">0.00</p>
+            </div>
           </div>
-          <div class="obi-track"><div class="depth-bar" id="bid-bar" style="background:var(--green);width:50%"></div></div>
-        </div>
-        <div>
-          <div class="flex justify-between text-xs mb-1">
-            <span style="color:var(--red)">Ask Vol</span>
-            <span id="ask-vol" class="font-mono">—</span>
-          </div>
-          <div class="obi-track"><div class="depth-bar" id="ask-bar" style="background:var(--red);width:50%"></div></div>
-        </div>
-      </div>
-
-      <div class="text-xs text-slate-500 mb-1">Historial señales</div>
-      <div class="flex gap-1 flex-wrap" id="obi-history"></div>
-    </div>
-
-    <!-- Portfolio Stats -->
-    <div class="col-span-4 card p-4">
-      <div class="text-xs text-slate-500 mb-3">SIMULACIÓN PORTAFOLIO ($100 · 2%/trade) — Momentum v9</div>
-      <div class="grid grid-cols-2 gap-3 mb-3">
-        <div>
-          <div class="stat-label">Equity</div>
-          <div class="stat-value" id="equity">$100.00</div>
-        </div>
-        <div>
-          <div class="stat-label">P&L Total</div>
-          <div class="stat-value" id="total-pnl" style="color:var(--yellow)">$0.00</div>
-        </div>
-        <div>
-          <div class="stat-label">P&L %</div>
-          <div class="text-base font-bold" id="total-pnl-pct" style="color:var(--yellow)">0.00%</div>
-        </div>
-        <div>
-          <div class="stat-label">Win Rate</div>
-          <div class="text-base font-bold" id="win-rate" style="color:var(--cyan)">—</div>
-        </div>
-        <div>
-          <div class="stat-label">Trades</div>
-          <div class="text-base font-bold" id="trades-total">0</div>
-        </div>
-        <div>
-          <div class="stat-label">W / L</div>
-          <div class="text-base font-bold"><span id="wins" style="color:var(--green)">0</span> / <span id="losses" style="color:var(--red)">0</span></div>
-        </div>
-      </div>
-
-      <div class="text-xs text-slate-500 mb-1">Salidas por tipo</div>
-      <div class="flex flex-wrap gap-1 mb-3" id="exit-reasons"></div>
-
-      <!-- Active trade box -->
-      <div id="active-trade-box" class="hidden rounded-lg p-3 border" style="border-color:var(--border)">
-        <div class="flex items-center justify-between mb-2">
-          <div class="text-xs text-slate-500">TRADE ACTIVO</div>
-          <div id="at-partial-badge" class="hidden">
-            <span class="badge badge-partial">✓ PARCIAL EJECUTADO</span>
-          </div>
-        </div>
-        <div class="flex justify-between items-center mb-2">
-          <div>
-            <span class="text-xs font-bold px-2 py-1 rounded" id="at-direction" style="background:#1e3a2a;color:var(--green)">UP</span>
-            <span class="text-xs ml-2">entrada <span id="at-entry" class="text-white font-mono">—</span></span>
-          </div>
-        </div>
-        <div class="flex justify-between text-xs text-slate-400 mb-3">
-          <span>Bet: <span id="at-bet" class="text-white">$2.00</span></span>
-          <span>Shares totales: <span id="at-shares" class="text-white font-mono">—</span></span>
-          <span id="at-remaining-wrap" class="hidden">Restantes: <span id="at-shares-remaining" class="font-mono" style="color:var(--cyan)">—</span></span>
-        </div>
-
-        <!-- P&L Real único (depth-walked) -->
-        <div class="rounded p-3 mb-3" style="background:#080d1a;border:1px solid var(--cyan)30">
-          <div class="flex items-center justify-between mb-1">
-            <div class="text-xs" style="color:var(--cyan)">P&L REAL (precio depth book)</div>
-            <div class="text-xs text-slate-500" id="at-depth-fill"></div>
-          </div>
-          <div class="flex items-end gap-3">
-            <div class="text-2xl font-bold" id="at-real-upnl">—</div>
-            <div class="text-sm text-slate-400 mb-0.5">avg exit: <span id="at-real-current" class="font-mono text-white">—</span></div>
-          </div>
-          <div class="mt-1 flex justify-between text-xs text-slate-500">
-            <span>precio mid: <span id="at-current" class="font-mono">—</span></span>
-            <span>diferencia mid vs depth: <span id="at-spread-impact" style="color:var(--red)">—</span></span>
-          </div>
-        </div>
-
-        <!-- TP/SL Progress Bar -->
-        <div class="mb-1">
-          <div class="flex justify-between text-xs mb-1">
-            <span style="color:var(--red)">SL <span id="at-sl-price" class="font-mono">—</span></span>
-            <span class="text-slate-400 font-mono" id="at-progress-label">—</span>
-            <span style="color:var(--green)">TP <span id="at-tp-price" class="font-mono">—</span></span>
-          </div>
-          <div class="progress-track">
-            <!-- Fondo rojo desde SL hasta entrada -->
-            <div id="at-bar-danger" style="position:absolute;left:0;top:0;bottom:0;background:rgba(255,68,102,0.15);"></div>
-            <!-- Fondo verde desde entrada hasta TP -->
-            <div id="at-bar-profit" style="position:absolute;top:0;bottom:0;background:rgba(0,255,136,0.15);right:0;"></div>
-            <!-- Relleno de progreso actual -->
-            <div id="at-progress-fill" class="progress-fill" style="width:0%;background:var(--yellow)"></div>
-            <!-- Marcador de precio de entrada -->
-            <div id="at-entry-marker" class="progress-marker"></div>
-            <!-- Marcador de precio actual -->
-            <div id="at-current-marker" class="progress-current"></div>
-          </div>
-          <div class="flex justify-between text-xs mt-1">
-            <span style="color:var(--red)" id="at-sl-pnl">—</span>
-            <span class="text-slate-500 text-center" id="at-dist-info">—</span>
-            <span style="color:var(--green)" id="at-tp-pnl">—</span>
-          </div>
-        </div>
-
-        <!-- Partial exit info (si ya se ejecutó) -->
-        <div id="at-partial-info" class="hidden mt-2 rounded p-2 text-xs" style="background:#0a1a0f;border:1px solid #1a3a2a">
-          <div class="flex justify-between">
-            <span class="text-slate-400">Parcial vendido a:</span>
-            <span id="at-partial-price" style="color:var(--green)" class="font-mono">—</span>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-slate-400">P&L parcial realizado:</span>
-            <span id="at-partial-pnl" class="font-mono font-bold">—</span>
-          </div>
-          <div class="flex justify-between mt-1">
-            <span class="text-slate-400">50% restante → binario (0 ó 1)</span>
-            <span style="color:var(--cyan)">50% → resolución binaria</span>
+          
+          <div class="grid grid-cols-3 gap-4 border-t border-slate-800 pt-4">
+            <div>
+              <p class="text-[10px] text-slate-500">INVERSIÓN</p>
+              <p class="text-lg font-bold">$1.00</p>
+            </div>
+            <div>
+              <p class="text-[10px] text-slate-500">RESULTADO PROYECTADO</p>
+              <p class="text-lg font-bold text-green-400" id="at-potential">+$0.00</p>
+            </div>
+            <div>
+              <p class="text-[10px] text-slate-500">ESTADO</p>
+              <p class="text-lg font-bold animate-pulse text-yellow-500">ESPERANDO...</p>
+            </div>
           </div>
         </div>
       </div>
-      <div class="mt-2 text-xs text-slate-500" id="streak-info"></div>
-    </div>
 
-    <!-- Countdown Timer -->
-    <div class="col-span-2 card p-4 flex flex-col items-center justify-center">
-      <div class="text-xs text-slate-500 mb-3 text-center">CIERRA EN</div>
-      <div class="ring-container mb-2">
-        <svg class="ring-svg" width="90" height="90" viewBox="0 0 90 90">
-          <circle class="ring-bg" cx="45" cy="45" r="39"/>
-          <circle class="ring-fg" id="ring-fg" cx="45" cy="45" r="39"
-                  stroke="var(--green)" stroke-dasharray="245" stroke-dashoffset="0"/>
-        </svg>
-        <div class="ring-text" id="countdown-text">
-          <span style="font-size:22px" id="ct-mm">5</span>
-          <span style="font-size:11px;color:#64748b">min</span>
+      <div class="card p-4 h-64 overflow-hidden flex flex-col">
+        <p class="text-xs text-slate-500 mb-3 uppercase">Historial de Operaciones</p>
+        <div id="trade-log" class="space-y-2 overflow-y-auto text-xs font-mono">
+          <div class="text-slate-600 italic">Iniciando sistema...</div>
         </div>
       </div>
-      <div class="text-center">
-        <div class="stat-label">Snapshot #</div>
-        <div class="font-bold text-lg" id="snap-num">0</div>
-      </div>
-      <div class="text-xs text-slate-500 mt-2 text-center" id="market-slug">—</div>
-    </div>
-  </div>
 
-  <!-- ROW 2 -->
-  <div class="grid grid-cols-12 gap-3 mb-3">
-    <div class="col-span-8 card p-4">
-      <div class="flex justify-between items-center mb-3">
-        <div class="text-xs text-slate-500">P&L ACUMULADO (USD)</div>
-        <div class="flex gap-4 text-xs">
-          <span>Mejor: <span id="best-trade" style="color:var(--green)">—</span></span>
-          <span>Peor: <span id="worst-trade" style="color:var(--red)">—</span></span>
-          <span>Promedio: <span id="avg-trade" class="text-white">—</span></span>
-        </div>
-      </div>
-      <canvas id="pnl-chart" height="100"></canvas>
-    </div>
-
-    <div class="col-span-4 card p-4">
-      <div class="text-xs text-slate-500 mb-3">ORDER BOOK (UP token)</div>
-      <div class="grid grid-cols-2 gap-x-3 text-xs">
-        <div>
-          <div class="text-slate-500 mb-1" style="color:var(--red)">ASKS (Sell UP)</div>
-          <div id="asks-list" class="space-y-1 font-mono"></div>
-        </div>
-        <div>
-          <div class="text-slate-500 mb-1" style="color:var(--green)">BIDS (Buy UP)</div>
-          <div id="bids-list" class="space-y-1 font-mono"></div>
-        </div>
-      </div>
-      <div class="mt-3 pt-3 border-t" style="border-color:var(--border)">
-        <div class="grid grid-cols-2 gap-2 text-xs text-center">
-          <div><div class="stat-label">Best Bid</div><div class="font-bold" id="best-bid" style="color:var(--green)">—</div></div>
-          <div><div class="stat-label">Best Ask</div><div class="font-bold" id="best-ask" style="color:var(--red)">—</div></div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ROW 3: Trade Log -->
-  <div class="card p-4">
-    <div class="text-xs text-slate-500 mb-3">HISTORIAL DE TRADES</div>
-    <div class="overflow-x-auto">
-      <table class="trade-table w-full">
-        <thead>
-          <tr>
-            <th>#</th><th>Mercado</th><th>Dir</th><th>Entrada</th><th>Bet</th>
-            <th>Shares</th><th>Salida</th><th>P&L</th><th>Exit</th><th>Status</th><th>Hora</th>
-          </tr>
-        </thead>
-        <tbody id="trade-tbody">
-          <tr><td colspan="11" class="text-center text-slate-500 py-4">Sin trades aún...</td></tr>
-        </tbody>
-      </table>
     </div>
   </div>
 
   <script>
-  // ── Chart setup ─────────────────────────────────────────────────────────────
-  const pnlCtx   = document.getElementById('pnl-chart').getContext('2d');
-  const pnlChart = new Chart(pnlCtx, {
-    type: 'line',
-    data: {
-      labels: ['0'],
-      datasets: [{
-        label: 'P&L ($)', data: [0],
-        borderColor: '#00ff88', backgroundColor: 'rgba(0,255,136,0.06)',
-        borderWidth: 2, pointRadius: 2, pointBackgroundColor: '#00ff88',
-        fill: true, tension: 0.3,
-      }]
-    },
-    options: {
-      responsive: true, animation: { duration: 400 },
-      plugins: {
-        legend: { display: false },
-        tooltip: { callbacks: { label: ctx => ` $${ctx.parsed.y.toFixed(4)}` } }
-      },
-      scales: {
-        x: { display: false },
-        y: { grid: { color: '#1e2d4a' }, ticks: { color: '#64748b', font: { size: 10 }, callback: v => `$${v.toFixed(2)}` } }
-      }
-    }
-  });
+    const $ = id => document.getElementById(id);
+    const ws_proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    let ws;
 
-  // ── WebSocket ────────────────────────────────────────────────────────────────
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  let ws;
-  function connect() {
-    ws = new WebSocket(`${proto}//${location.host}/ws`);
-    ws.onmessage = e => update(JSON.parse(e.data));
-    ws.onclose   = ()  => setTimeout(connect, 3000);
-    ws.onerror   = ()  => ws.close();
-    setInterval(() => { if (ws.readyState === 1) ws.send('ping'); }, 20000);
-  }
-  connect();
-
-  // ── Helpers ──────────────────────────────────────────────────────────────────
-  const $    = id => document.getElementById(id);
-  const fmt  = (v, d=2) => v !== undefined && v !== null ? Number(v).toFixed(d) : '—';
-  const fmtPnl = v => {
-    if (v === undefined || v === null) return '—';
-    return (Number(v) >= 0 ? '+' : '') + Number(v).toFixed(4);
-  };
-  function setColor(el, value, neutral='#e2e8f0') {
-    el.style.color = Number(value) > 0 ? 'var(--green)' : Number(value) < 0 ? 'var(--red)' : neutral;
-  }
-
-  const EXIT_BADGE = {
-    TP:         '<span class="badge badge-tp">TP</span>',
-    PARTIAL_TP: '<span class="badge badge-partial">½TP</span>',
-    SL:         '<span class="badge badge-sl">SL</span>',
-    SIGNAL:     '<span class="badge badge-signal">SIG</span>',
-    LATE:       '<span class="badge badge-late">LATE</span>',
-    EXPIRE:     '<span class="badge badge-expire">EXPIRE</span>',
-    FORCED:     '<span class="badge badge-forced">FORCED</span>',
-  };
-  function exitBadge(r) {
-    return EXIT_BADGE[r] || `<span class="badge badge-expire">${r||'—'}</span>`;
-  }
-
-  // ── Main update ──────────────────────────────────────────────────────────────
-  function update(s) {
-    updateStatus(s.status);
-    $('last-update').textContent = new Date().toLocaleTimeString();
-    if (s.snapshot) $('snap-num').textContent = s.snapshot;
-
-    if (s.market && s.market.question) {
-      $('market-question').textContent   = s.market.question;
-      $('market-slug').textContent       = s.market.market_slug || '';
-      $('header-up-price').textContent   = fmt(s.market.up_price,   4);
-      $('header-down-price').textContent = fmt(s.market.down_price, 4);
-      $('header-up-ask').textContent     = fmt(s.market.up_ask,     4);
-      $('header-down-ask').textContent   = fmt(s.market.down_ask,   4);
-      $('header-up-bid').textContent     = fmt(s.market.up_bid,     4);
+    function connect() {
+      ws = new WebSocket(`${ws_proto}//${location.host}/ws`);
+      ws.onmessage = e => {
+        const data = JSON.parse(e.data);
+        updateUI(data);
+      };
+      ws.onclose = () => setTimeout(connect, 2000);
     }
 
-    if (s.orderbook) updateOrderBook(s.orderbook);
-    if (s.signal)    updateSignal(s.signal);
-    if (s.market)    updateCountdown(s.market.seconds_remaining);
-    if (s.portfolio) updatePortfolio(s.portfolio);
-  }
-
-  function updateStatus(status) {
-    const dot   = $('status-dot');
-    const label = $('status-label');
-    dot.className = 'status-dot';
-    const map = {
-      running:      ['status-run',  'En vivo'],
-      searching:    ['status-init', 'Buscando mercado...'],
-      initializing: ['status-init', 'Inicializando'],
-      error:        ['status-err',  'Error'],
-    };
-    const [cls, txt] = map[status] || ['status-init', status];
-    dot.classList.add(cls);
-    label.textContent = txt;
-  }
-
-  function updateOrderBook(ob) {
-    $('header-spread').textContent = fmt(ob.spread, 4);
-    $('best-bid').textContent      = fmt(ob.best_bid, 4);
-    $('best-ask').textContent      = fmt(ob.best_ask, 4);
-    $('bid-vol').textContent       = `$${fmt(ob.bid_volume, 0)}`;
-    $('ask-vol').textContent       = `$${fmt(ob.ask_volume, 0)}`;
-
-    const maxVol = Math.max(ob.bid_volume, ob.ask_volume, 1);
-    $('bid-bar').style.width = (ob.bid_volume / maxVol * 100) + '%';
-    $('ask-bar').style.width = (ob.ask_volume / maxVol * 100) + '%';
-
-    const maxSize = Math.max(...(ob.top_asks||[]).map(a=>a[1]), ...(ob.top_bids||[]).map(b=>b[1]), 1);
-
-    $('asks-list').innerHTML = (ob.top_asks||[]).slice(0,8).reverse().map(([p,s]) => {
-      const w = Math.round(s/maxSize*100);
-      return `<div class="relative py-0.5">
-        <div class="absolute inset-y-0 right-0 opacity-20 rounded" style="width:${w}%;background:var(--red)"></div>
-        <div class="flex justify-between relative z-10">
-          <span style="color:var(--red)">${fmt(p,4)}</span>
-          <span class="text-slate-400">${fmt(s,1)}</span>
-        </div></div>`;
-    }).join('');
-
-    $('bids-list').innerHTML = (ob.top_bids||[]).slice(0,8).map(([p,s]) => {
-      const w = Math.round(s/maxSize*100);
-      return `<div class="relative py-0.5">
-        <div class="absolute inset-y-0 left-0 opacity-20 rounded" style="width:${w}%;background:var(--green)"></div>
-        <div class="flex justify-between relative z-10">
-          <span style="color:var(--green)">${fmt(p,4)}</span>
-          <span class="text-slate-400">${fmt(s,1)}</span>
-        </div></div>`;
-    }).join('');
-  }
-
-  function updateSignal(sig) {
-    const label   = sig.label || 'NEUTRAL';
-    const isUp    = label.includes('UP');
-    const isDown  = label.includes('DOWN');
-    const color   = isUp ? 'var(--green)' : isDown ? 'var(--red)' : 'var(--yellow)';
-    const glowCls = isUp ? 'glow-green' : isDown ? 'glow-red' : 'glow-yellow';
-    const animCls = isUp ? 'signal-up'  : isDown ? 'signal-down' : 'signal-neutral';
-
-    $('signal-label').textContent = label;
-    $('signal-label').style.color = color;
-    $('signal-label').className   = `text-3xl font-black mb-2 ${glowCls}`;
-
-    const card = $('signal-card');
-    card.className = card.className.replace(/signal-\w+/g, '').trim() + ' ' + animCls;
-
-    $('signal-desc').textContent = isUp
-      ? 'Token dominante UP → momentum hacia 1.0'
-      : isDown ? 'Token dominante DOWN → momentum hacia 1.0'
-      : 'Sin señal — esperando momentum claro';
-
-    const conf = sig.confidence || 50;
-    $('conf-pct').textContent    = conf + '%';
-    $('conf-bar').style.width      = conf + '%';
-    $('conf-bar').style.background = color;
-
-    $('obi-now').textContent = ((sig.obi_now||0)*100).toFixed(1) + '%';
-    $('obi-avg').textContent = ((sig.obi_avg||0)*100).toFixed(1) + '%';
-    setColor($('obi-now'), sig.obi_now);
-    setColor($('obi-avg'), sig.obi_avg);
-
-    const obi = sig.combined || 0;
-    const pct = Math.min(Math.abs(obi) * 100, 100);
-    const bar = $('obi-bar');
-    if (obi >= 0) {
-      bar.style.width      = pct + '%';
-      bar.style.marginLeft = '50%';
-      bar.style.background = 'var(--green)';
-    } else {
-      bar.style.width      = pct + '%';
-      bar.style.marginLeft = (50 - pct) + '%';
-      bar.style.background = 'var(--red)';
-    }
-    $('obi-combined').textContent = (obi >= 0 ? '+' : '') + (obi*100).toFixed(2) + '%';
-    setColor($('obi-combined'), obi);
-
-    const hist = sig.history || [];
-    const thr  = sig.threshold || 0.15;
-    $('obi-history').innerHTML = hist.map(o => {
-      const cls = o > thr ? 'dot-up' : o < -thr ? 'dot-down' : 'dot-neutral';
-      const ch  = o > thr ? '▲' : o < -thr ? '▼' : '─';
-      return `<span class="${cls}" title="${(o*100).toFixed(1)}%">${ch}</span>`;
-    }).join('');
-  }
-
-  const TOTAL_SECS = 300;
-  function updateCountdown(secs) {
-    if (secs === null || secs === undefined) { $('ct-mm').textContent = '—'; return; }
-    const s  = Math.max(0, Math.round(secs));
-    const m  = Math.floor(s/60);
-    const ss = s % 60;
-    $('ct-mm').textContent = m + ':' + ss.toString().padStart(2,'0');
-    const circumference = 2 * Math.PI * 39;
-    const offset = circumference * (1 - s / TOTAL_SECS);
-    const fg = $('ring-fg');
-    fg.style.strokeDashoffset = offset;
-    fg.style.stroke = s > 120 ? 'var(--green)' : s > 30 ? 'var(--yellow)' : 'var(--red)';
-  }
-
-  function updatePortfolio(p) {
-    $('equity').textContent        = '$' + fmt(p.equity, 2);
-    $('total-pnl').textContent     = fmtPnl(p.total_pnl);
-    $('total-pnl-pct').textContent = (p.total_pnl_pct >= 0 ? '+' : '') + fmt(p.total_pnl_pct, 2) + '%';
-    $('win-rate').textContent      = p.total_trades > 0 ? p.win_rate + '%' : '—';
-    $('trades-total').textContent  = p.total_trades;
-    $('wins').textContent          = p.wins;
-    $('losses').textContent        = p.losses;
-    setColor($('total-pnl'),     p.total_pnl);
-    setColor($('total-pnl-pct'), p.total_pnl_pct);
-
-    $('best-trade').textContent  = p.best_trade  !== 0 ? '+$' + fmt(p.best_trade,  4) : '—';
-    $('worst-trade').textContent = p.worst_trade !== 0 ?  '$' + fmt(p.worst_trade, 4) : '—';
-    $('avg-trade').textContent   = p.total_trades > 0  ?  '$' + fmt(p.avg_pnl,     4) : '—';
-
-    const reasons = p.exit_reasons || {};
-    $('exit-reasons').innerHTML = Object.entries(reasons).map(([r,n]) =>
-      `${exitBadge(r)} <span class="text-xs text-slate-400">${n}</span>`
-    ).join(' ');
-
-    const atBox = $('active-trade-box');
-    if (p.active_trade) {
-      const at = p.active_trade;
-      atBox.classList.remove('hidden');
-
-      // Dirección
-      const isUp = at.direction === 'UP';
-      const dirEl = $('at-direction');
-      dirEl.textContent      = at.direction;
-      dirEl.style.background = isUp ? '#1e3a2a' : '#3a1e1e';
-      dirEl.style.color      = isUp ? 'var(--green)' : 'var(--red)';
-
-      $('at-entry').textContent  = fmt(at.entry_price, 4);
-      $('at-bet').textContent    = '$' + fmt(at.bet_size, 2);
-      $('at-shares').textContent = fmt(at.shares, 4);
-
-      // Shares restantes (si ya hizo parcial)
-      const partialDone = at.partial_exit_done;
-      if (partialDone) {
-        $('at-remaining-wrap').classList.remove('hidden');
-        $('at-shares-remaining').textContent = fmt(at.shares_remaining, 4);
-        $('at-partial-badge').classList.remove('hidden');
-        $('at-partial-info').classList.remove('hidden');
-        $('at-partial-price').textContent = fmt(at.partial_exit_price, 4);
-        const ppnl = $('at-partial-pnl');
-        ppnl.textContent = fmtPnl(at.partial_pnl);
-        setColor(ppnl, at.partial_pnl);
-      } else {
-        $('at-remaining-wrap').classList.add('hidden');
-        $('at-partial-badge').classList.add('hidden');
-        $('at-partial-info').classList.add('hidden');
+    function updateUI(s) {
+      // 1. Status y Header
+      if (s.status === 'active') {
+        $('status-dot').className = 'status-dot status-run';
+        $('status-label').textContent = 'Escaneando';
       }
 
-      // ── P&L REAL (depth-walked) — única fuente de verdad ─────────────────
-      $('at-current').textContent = fmt(at.current_price, 4);
-
-      const realUpnlEl  = $('at-real-upnl');
-      const depthFillEl = $('at-depth-fill');
-
-      if (at.real_unrealized_pnl !== null && at.real_unrealized_pnl !== undefined) {
-        realUpnlEl.textContent = fmtPnl(at.real_unrealized_pnl);
-        setColor(realUpnlEl, at.real_unrealized_pnl);
-        $('at-real-current').textContent = fmt(at.real_current_price, 4);
-
-        const si    = at.spread_impact || 0;
-        const siEl  = $('at-spread-impact');
-        siEl.textContent = (si > 0 ? '-$' : '+$') + Math.abs(si).toFixed(4);
-        siEl.style.color = si > 0 ? 'var(--red)' : 'var(--green)';
-
-        const d = at.exit_depth;
-        if (d) {
-          if (d.filled) {
-            depthFillEl.textContent = `✓ ${fmt(d.shares_sold,2)} shares`;
-            depthFillEl.style.color = 'var(--green)';
+      // 2. Mercado y Timer
+      if (s.market) {
+        $('market-question').textContent = s.market.question || "Buscando mercado...";
+        const secs = s.market.seconds_remaining;
+        
+        if (secs !== null) {
+          const m = Math.floor(secs / 60);
+          const ss = Math.round(secs % 60);
+          $('timer').textContent = `${m}:${ss.toString().padStart(2, '0')}`;
+          
+          // Estilo de alerta en el último minuto
+          if (secs <= 60) {
+            $('timer').classList.add('last-minute');
+            $('timer-msg').textContent = "¡VENTANA DE ENTRADA ABIERTA!";
           } else {
-            depthFillEl.textContent = `⚠ ${(d.fill_pct||0).toFixed(0)}% llenado`;
-            depthFillEl.style.color = 'var(--red)';
+            $('timer').classList.remove('last-minute');
+            $('timer-msg').textContent = "Esperando el último minuto...";
           }
-        } else {
-          depthFillEl.textContent = '';
         }
-      } else {
-        // Sin libro de órdenes suficiente — fallback al mid
-        const midPnl = at.unrealized_pnl;
-        realUpnlEl.textContent = midPnl !== null && midPnl !== undefined ? fmtPnl(midPnl) + ' (mid)' : '—';
-        setColor(realUpnlEl, midPnl || 0);
-        $('at-real-current').textContent = fmt(at.current_price, 4) + ' (mid)';
-        $('at-spread-impact').textContent = '—';
-        $('at-spread-impact').style.color = '#64748b';
-        depthFillEl.textContent = 'libro sin datos';
-        depthFillEl.style.color = '#64748b';
+
+        // Precios
+        const up = s.market.up_price || 0;
+        const down = s.market.down_price || 0;
+        $('price-up').textContent = up.toFixed(3);
+        $('price-down').textContent = down.toFixed(3);
+
+        // Resaltar si están en rango
+        $('box-up').className = (up > 0.05 && up <= 0.15) ? 'price-box p-4 rounded-lg text-center price-target' : 'price-box p-4 rounded-lg text-center bg-slate-900/50';
+        $('box-down').className = (down > 0.05 && down <= 0.15) ? 'price-box p-4 rounded-lg text-center price-target' : 'price-box p-4 rounded-lg text-center bg-slate-900/50';
       }
 
-      // ── Barra TP/SL — calculada 100% en el cliente ───────────────────────
-      const sl = at.sl_price || 0.50;
-      const tp = at.tp_price || 0.90;
-      // Precio actual real: usar depth si disponible, sino mid
-      const cp = (at.real_current_price !== null && at.real_current_price !== undefined)
-                 ? at.real_current_price
-                 : at.current_price;
-
-      const range    = tp - sl;                            // ej: 0.90-0.50 = 0.40
-      const cpClamped = Math.max(sl, Math.min(tp, cp));   // cp dentro del rango
-
-      // % de 0→100 donde 0=SL y 100=TP
-      const progressPct  = range > 0 ? ((cpClamped - sl) / range * 100) : 50;
-      const entryPct     = range > 0 ? ((Math.min(Math.max(at.entry_price, sl), tp) - sl) / range * 100) : 20;
-
-      // Colores de la barra de relleno según posición relativa a entrada
-      let fillColor;
-      if (cp >= tp) fillColor = 'var(--green)';
-      else if (cp <= sl) fillColor = 'var(--red)';
-      else if (cp > at.entry_price) fillColor = '#22d3ee'; // por encima de entrada
-      else fillColor = 'var(--yellow)';                     // por debajo de entrada
-
-      $('at-sl-price').textContent = fmt(sl, 4);
-      $('at-tp-price').textContent = fmt(tp, 4);
-      $('at-progress-label').textContent = fmt(cp, 4);
-
-      // Zonas de fondo rojo (SL→entrada) y verde (entrada→TP)
-      $('at-bar-danger').style.width = entryPct + '%';
-      $('at-bar-profit').style.left  = entryPct + '%';
-
-      // Barra de progreso
-      $('at-progress-fill').style.width      = progressPct + '%';
-      $('at-progress-fill').style.background = fillColor;
-
-      // Marcadores
-      $('at-entry-marker').style.left   = entryPct + '%';
-      $('at-current-marker').style.left = progressPct + '%';
-
-      // Distancias
-      const distToTP = tp - cp;
-      const distToSL = cp - sl;
-      $('at-sl-pnl').textContent  = `dist SL: ${fmt(distToSL, 4)}`;
-      $('at-tp-pnl').textContent  = `dist TP: ${fmt(distToTP, 4)}`;
-      $('at-dist-info').textContent = partialDone ? '→ esperando expiración' : '';
-
-    } else {
-      atBox.classList.add('hidden');
+      // 3. Portafolio y Trade Activo
+      if (s.portfolio) {
+        $('equity').textContent = `$${s.portfolio.capital.toFixed(2)}`;
+        
+        if (s.portfolio.active_trade) {
+          $('no-trade-msg').classList.add('hidden');
+          $('trade-data').classList.remove('hidden');
+          
+          const t = s.portfolio.active_trade;
+          $('at-direction').textContent = t.direction;
+          $('at-direction').className = `text-2xl font-bold mt-2 ${t.direction === 'UP' ? 'text-green-400' : 'text-red-400'}`;
+          $('at-entry').textContent = t.entry_price.toFixed(3);
+          
+          // Cálculo simple de retorno: (1 / precio) - 1 (inversión)
+          const potential = (1.0 / t.entry_price) - 1.0;
+          $('at-potential').textContent = `+$${potential.toFixed(2)}`;
+        } else {
+          $('no-trade-msg').classList.remove('hidden');
+          $('trade-data').classList.add('hidden');
+        }
+      }
     }
 
-    const streak = p.signal_streak;
-    if (streak && streak.label && streak.count > 0) {
-      $('streak-info').textContent = `Racha señal ${streak.label}: ${streak.count} snap${streak.count>1?'s':''}`;
-    } else {
-      $('streak-info').textContent = '';
-    }
-
-    // P&L chart
-    const hist = p.pnl_history || [0];
-    pnlChart.data.labels   = hist.map((_, i) => i);
-    pnlChart.data.datasets[0].data = hist;
-    const last      = hist[hist.length - 1] || 0;
-    const lineColor = last >= 0 ? '#00ff88' : '#ff4466';
-    const fillColor2 = last >= 0 ? 'rgba(0,255,136,0.06)' : 'rgba(255,68,102,0.06)';
-    pnlChart.data.datasets[0].borderColor          = lineColor;
-    pnlChart.data.datasets[0].backgroundColor      = fillColor2;
-    pnlChart.data.datasets[0].pointBackgroundColor = lineColor;
-    pnlChart.update('none');
-
-    updateTradeLog(p.trade_log || []);
-  }
-
-  function updateTradeLog(trades) {
-    const tbody = $('trade-tbody');
-    if (!trades.length) {
-      tbody.innerHTML = '<tr><td colspan="11" class="text-center text-slate-500 py-4">Sin trades aún...</td></tr>';
-      return;
-    }
-    tbody.innerHTML = trades.map(t => {
-      const pnlColor    = (t.pnl || 0) >= 0 ? 'var(--green)' : 'var(--red)';
-      const statusBg    = { WIN:'#1e3a2a', LOSS:'#3a1e1e', OPEN:'#1e2d4a', CANCELLED:'#2a2a1e' }[t.status] || '#1e2d4a';
-      const statusColor = { WIN:'var(--green)', LOSS:'var(--red)', OPEN:'var(--cyan)', CANCELLED:'var(--yellow)' }[t.status] || '#e2e8f0';
-      const dirColor    = t.direction === 'UP' ? 'var(--green)' : 'var(--red)';
-      const mkt         = (t.market || '').split('-')[0].trim() || '—';
-      const partialTag  = t.partial_exit_done
-        ? `<span class="badge badge-partial ml-1">½TP@${fmt(t.partial_exit_price,3)}</span>` : '';
-      return `<tr>
-        <td class="text-slate-400">#${t.id}</td>
-        <td class="text-slate-400" title="${t.market||''}">${mkt.slice(0,18)}</td>
-        <td style="color:${dirColor};font-weight:bold">${t.direction==='UP'?'▲ UP':'▼ DN'}</td>
-        <td class="font-mono">${fmt(t.entry_price,4)}</td>
-        <td class="font-mono">$${fmt(t.bet_size,2)}</td>
-        <td class="font-mono">${fmt(t.shares,2)}${partialTag}</td>
-        <td class="font-mono">${t.exit_price !== null && t.exit_price !== undefined ? fmt(t.exit_price,4) : '—'}</td>
-        <td class="font-mono font-bold" style="color:${pnlColor}">${t.pnl !== null && t.pnl !== undefined ? fmtPnl(t.pnl) : '—'}</td>
-        <td>${exitBadge(t.exit_reason)}</td>
-        <td><span class="px-2 py-0.5 rounded text-xs font-bold" style="background:${statusBg};color:${statusColor}">${t.status}</span></td>
-        <td class="text-slate-500">${t.entry_time||'—'}</td>
-      </tr>`;
-    }).join('');
-  }
+    // Iniciar
+    connect();
   </script>
 </body>
 </html>
