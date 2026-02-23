@@ -287,8 +287,9 @@ async def strategy_loop():
                         market_info["down_price"],
                         exit_bid_price=exit_bid_price,
                     )
+                    precio_str = f"{exit_bid_price:.4f}" if exit_bid_price is not None else "mid"
                     log.info(
-                        f"PARTIAL_TP #{at.id}: precio={exit_bid_price:.4f} "
+                        f"PARTIAL_TP #{at.id}: precio={precio_str} "
                         f"pnl_parcial={partial_pnl:+.4f} | "
                         f"shares restantes={at.shares_remaining:.4f} → esperando resolución"
                     )
