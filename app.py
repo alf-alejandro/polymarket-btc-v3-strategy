@@ -85,7 +85,7 @@ def _walk_bids_for_exit(top_bids: list, shares_to_sell: float) -> dict:
 
 # ── Config ────────────────────────────────────────────────────────────────────
 POLL_INTERVAL = float(os.environ.get("POLL_INTERVAL", "3"))
-OBI_THRESHOLD = float(os.environ.get("OBI_THRESHOLD", "0.35"))
+OBI_THRESHOLD = float(os.environ.get("OBI_THRESHOLD", "0.35")) # <-- Modificado de 0.15 a 0.35
 WINDOW_SIZE   = int(os.environ.get("WINDOW_SIZE", "8"))
 PORT          = int(os.environ.get("PORT", "8000"))
 
@@ -226,6 +226,19 @@ async def strategy_loop():
 
             # ── Signal ────────────────────────────────────────────────────────
             signal = compute_signal(ob["obi"], list(obi_window), OBI_THRESHOLD)
+
+            # --- NUEVO: FILTRO DURO DE SPREAD ANTES DE ENTRAR ---
+            if book_valid:
+                up_spread_pct = (up_ask - up_bid) / up_ask if up_ask > 0 else 1.0
+                down_spread_pct = (down_ask - down_bid) / down_ask if down_ask > 0 else 1.0
+                
+                sig_label = signal.get("label", "")
+                if "UP" in sig_label and up_spread_pct > 0.12:
+                    log.info(f"Ignorando {sig_label}: Spread UP del {up_spread_pct*100:.1f}% es demasiado alto.")
+                    signal["label"] = "NEUTRAL"
+                elif "DOWN" in sig_label and down_spread_pct > 0.12:
+                    log.info(f"Ignorando {sig_label}: Spread DOWN del {down_spread_pct*100:.1f}% es demasiado alto.")
+                    signal["label"] = "NEUTRAL"
 
             # ── Simulation ────────────────────────────────────────────────────
             secs_left = seconds_remaining(market_info)
